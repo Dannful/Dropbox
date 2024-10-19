@@ -33,13 +33,25 @@ ConnectionResult server_connect(char host[], u_int16_t port) {
   return SUCCESS;
 }
 
-void send_message(u_int8_t bytes[], unsigned int count) {
+void send_message(Packet packet) {
   if (socket_file_descriptor == -1) {
     printf("The connection has not been established!");
     return;
   }
-  send(socket_file_descriptor, bytes, count, 0);
+
+  send(socket_file_descriptor, &packet, sizeof(Packet) - sizeof(u_int8_t *), 0);
+  send(socket_file_descriptor, packet.payload, packet.data_length, 0);
 }
+
+void send_upload_message(char path[]);
+
+void send_download_message(char path[]);
+
+void send_delete_message(char path[]);
+
+char *send_list_server_message();
+char *send_list_client_message();
+void send_sync_dir_message() {}
 
 void close_connection() {
   if (socket_file_descriptor == -1) {
