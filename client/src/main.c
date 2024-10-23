@@ -13,33 +13,30 @@ void deallocate() {
 int main(int argc, char *argv[]) {
   atexit(deallocate);
   switch (server_connect(argv[2], atoi(argv[3]))) {
-  case INVALID_ADDRESS:
-    printf("The supplied server address is invalid!");
+  case CONNECTION_INVALID_ADDRESS:
+    printf("The supplied server address is invalid!\n");
     return 1;
-  case SOCKET_FAILURE:
-    printf("Failed to create socket.");
+  case CONNECTION_SOCKET_FAILRUE:
+    printf("Failed to create socket.\n");
     return 1;
   case CONNECT_FAILURE:
-    printf("Failed to connect to server!");
+    printf("Failed to connect to server!\n");
     return 1;
-  case SUCCESS:
+  case SERVER_CONNECTION_SUCCESS:
     break;
   }
-  send_message();
   switch (initialize("./syncdir")) {
   case FILE_DESCRIPTOR_CREATE_ERROR:
-    printf("Failed to initialize socket file descriptor!");
+    printf("Failed to initialize socket file descriptor!\n");
     return 1;
   case FAILED_TO_WATCH:
-    printf("Failed to initialize watching of directory!");
+    printf("Failed to initialize watching of directory!\n");
+    break;
   case OK:
     printf("Successfully created sync watcher!\n");
     break;
   }
-  char *line = NULL;
-  size_t size;
-  while (getline(&line, &size, stdin) > 0) {
-    send_message((u_int8_t *)line, size);
-  }
+  send_upload_message(
+      "/home/dannly/Documents/CS/Personal/C/Dropbox/romano.txt");
   return 0;
 }

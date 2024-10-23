@@ -11,18 +11,18 @@ int main(void) {
   case SERVER_ACCEPT_FAILURE:
     printf("Server has failed to accept client connection!\n");
     return 1;
-  case SOCKET_CREATION_FAILURE:
+  case SERVER_SOCKET_CREATION_FAILURE:
     printf("Failed to create server listen socket!\n");
     return 1;
-  case SOCKET_LISTEN_FAILURE:
+  case SERVER_SOCKET_LISTEN_FAILURE:
     printf("Failed to set server socket to LISTEN mode!\n");
     return 1;
-  case SOCKET_BIND_FAILURE:
+  case SERVER_SOCKET_BIND_FAILURE:
     printf("Failed to bind server socket! Make sure there is no other process "
            "running on port %d\n",
            PORT);
     return 1;
-  case SUCCESS:
+  case SERVER_CONNECTION_SUCCESS:
     break;
   }
 

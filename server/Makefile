@@ -1,5 +1,5 @@
-./build/server: ./build ./src/*.c
-	gcc src/*.c -o build/server
+./build/server: ./build ./src/*.c ./include/*.h ./../core/*
+	gcc src/*.c ../core/*.c -o build/server
 
 ./build:
 	mkdir -p build
