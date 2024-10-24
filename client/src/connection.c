@@ -1,6 +1,6 @@
 #include "../include/connection.h"
 #include <arpa/inet.h>
-#include <math.h>
+#include <libgen.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 int socket_file_descriptor = -1;
+char username[USERNAME_LENGTH];
 
 ConnectionResult server_connect(char host[], u_int16_t port) {
   socket_file_descriptor = socket(AF_INET, SOCK_STREAM, 0);
@@ -41,41 +42,56 @@ void send_upload_message(char path[]) {
     exit(1);
     return;
   }
-  FILE *file = fopen(path, "rb");
-  if (file == NULL) {
-    printf("Failed to open file %s\n.", path);
-    return;
-  }
-  fseek(file, 0, SEEK_END);
-  unsigned int file_size = ftell(file);
-  rewind(file);
-  unsigned int current_fragment = 0;
-  unsigned int fragment_count = ceil((double)file_size / PACKET_LENGTH);
-  unsigned int bytes_left = 0;
-  while ((bytes_left = file_size - ftell(file)) > 0) {
-    unsigned int buffer_size =
-        PACKET_LENGTH <= bytes_left ? PACKET_LENGTH : bytes_left;
-    uint8_t buffer[buffer_size];
-    unsigned int read_bytes = fread(buffer, sizeof(uint8_t), buffer_size, file);
-    Packet packet;
-    packet.message_type = DATA;
-    packet.data.data_packet.data_length = read_bytes;
-    packet.data.data_packet.fragment_count = fragment_count;
-    packet.data.data_packet.sequence_number = current_fragment++;
-    packet.data.data_packet.data = buffer;
-    char test[] = "/home/dannly/Documents/CS/Personal/C/Dropbox/dest.txt";
-    strcpy(packet.data.data_packet.path, test);
-    send_packet(socket_file_descriptor, packet);
-  }
+  send_file(path, username, socket_file_descriptor);
 }
 
-void send_download_message(char path[]);
+void send_download_message(char path[]) {
+  Packet packet;
+  packet.type = COMMAND;
+  unsigned long message_length = strlen("DLD ") + strlen(path) + 1;
+  unsigned long username_length = strlen(username) + 1;
+  char download_message[message_length];
+  sprintf(download_message, "DLD %s", path);
+  packet.length = message_length + username_length;
+  packet.total_size = message_length;
+  packet.sequence_number = message_length;
+  send(socket_file_descriptor, &packet, sizeof(packet), 0);
+  send(socket_file_descriptor, username, username_length, 0);
+  send(socket_file_descriptor, download_message, message_length, 0);
+}
 
-void send_delete_message(char path[]);
+void send_delete_message(char path[]) {
+  Packet packet;
+  packet.type = COMMAND;
+  unsigned long message_length = strlen("DEL ") + strlen(path) + 1;
+  unsigned long username_length = strlen(username) + 1;
+  char delete_message[message_length];
+  sprintf(delete_message, "DEL %s", path);
+  packet.length = message_length + username_length;
+  packet.total_size = message_length;
+  packet.sequence_number = message_length;
+  send(socket_file_descriptor, &packet, sizeof(packet), 0);
+  send(socket_file_descriptor, username, username_length, 0);
+  send(socket_file_descriptor, delete_message, message_length, 0);
+}
 
 char *send_list_server_message();
 char *send_list_client_message();
-void send_sync_dir_message() {}
+void send_sync_dir_message() {
+  Packet packet;
+  packet.type = COMMAND;
+  char message[] = "SYN";
+  unsigned long length = strlen(message) + 1;
+  unsigned long username_length = strlen(username) + 1;
+  packet.length = length + username_length;
+  packet.sequence_number = length;
+  packet.total_size = length;
+  uint8_t data[packet.length];
+  memmove(data, username, username_length);
+  memmove(data + username_length, message, length);
+  send(socket_file_descriptor, &packet, sizeof(packet), 0);
+  send(socket_file_descriptor, data, packet.length, 0);
+}
 
 void close_connection() {
   if (socket_file_descriptor == -1) {
@@ -84,3 +100,5 @@ void close_connection() {
   }
   close(socket_file_descriptor);
 }
+
+void set_username(char user[USERNAME_LENGTH]) { strcpy(username, user); }

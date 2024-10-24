@@ -2,6 +2,8 @@
 #include "../include/fs_sync.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -10,8 +12,15 @@ void deallocate() {
   destroy();
 }
 
+void flush_stdin() {
+  int c;
+  while ((c = getchar()) != '\n' && c != EOF)
+    ;
+}
+
 int main(int argc, char *argv[]) {
   atexit(deallocate);
+  set_username(argv[1]);
   switch (server_connect(argv[2], atoi(argv[3]))) {
   case CONNECTION_INVALID_ADDRESS:
     printf("The supplied server address is invalid!\n");
@@ -23,7 +32,12 @@ int main(int argc, char *argv[]) {
     printf("Failed to connect to server!\n");
     return 1;
   case SERVER_CONNECTION_SUCCESS:
+    send_sync_dir_message();
     break;
+  }
+  struct stat st = {0};
+  if (stat("./syncdir", &st) == -1) {
+    mkdir("./syncdir", 0700);
   }
   switch (initialize("./syncdir")) {
   case FILE_DESCRIPTOR_CREATE_ERROR:
@@ -36,7 +50,27 @@ int main(int argc, char *argv[]) {
     printf("Successfully created sync watcher!\n");
     break;
   }
-  send_upload_message(
-      "/home/dannly/Documents/CS/Personal/C/Dropbox/romano.txt");
+  char input[1024] = {0};
+  char argument[1024] = {0};
+  while (1) {
+    fgets(input, sizeof(input), stdin);
+    char *command = strtok(input, " ");
+    command[strcspn(command, "\n")] = 0;
+
+    if (strcmp(command, "upload") == 0) {
+      char *argument = strtok(NULL, " ");
+      argument[strlen(argument) - 1] = '\0';
+      send_upload_message(argument);
+    } else if (strcmp(command, "get_sync_dir") == 0) {
+      send_sync_dir_message();
+    } else if (strcmp(command, "delete") == 0) {
+      char *argument = strtok(NULL, " ");
+      argument[strlen(argument) - 1] = '\0';
+      send_delete_message(argument);
+    } else if (strcmp(command, "exit") == 0) {
+      close_connection();
+      return 0;
+    }
+  }
   return 0;
 }
