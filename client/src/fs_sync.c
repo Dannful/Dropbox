@@ -41,6 +41,12 @@ void *watcher(void *arg) {
         stat(in_dir_path, &path_stat);
         if (!S_ISREG(path_stat.st_mode))
           continue;
+        if (event->mask & IN_CREATE)
+          printf("create\n");
+        if (event->mask & IN_MODIFY)
+          printf("modify\n");
+        if (event->mask & IN_MOVE)
+          printf("move\n");
         printf("Changes detected: %s.\n", event->name);
         send_upload_message(in_dir_path);
       }

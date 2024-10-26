@@ -77,25 +77,6 @@ void *thread_listen(void *arg) {
   pthread_exit(0);
 }
 
-unsigned long hash(char str[], unsigned int size) {
-  unsigned long hash = 5381;
-  int c;
-
-  while ((c = *str++))
-    hash = ((hash << 5) + hash) + c;
-
-  return hash % size;
-}
-
-ssize_t safe_recv(int socket, void *buffer, size_t amount, int flags) {
-  ssize_t read = 0;
-  while (read < amount) {
-    if ((read += recv(socket, buffer + read, amount - read, flags)) == 0)
-      return 0;
-  }
-  return amount;
-}
-
 void *handle_client_connection(void *arg) {
   int *client_connection_pointer = ((int *)arg);
   int client_connection = *client_connection_pointer;
@@ -136,15 +117,41 @@ void *handle_client_connection(void *arg) {
       command[3] = '\0';
 
       if (strcmp(command, "DEL") == 0) {
+        unsigned long command_path_length = strlen(full_command + 4);
+        unsigned long path_length = username_length + 3 + command_path_length;
+        char new_file_path[path_length];
+        sprintf(new_file_path, "./%s/%s", username, full_command + 4);
+        printf("Received DELETE request from user %s and path %s.\n", username,
+               full_command + 4);
+        if (remove(new_file_path) != 0)
+          break;
+
+        Packet response_packet;
+        response_packet.type = COMMAND;
+        unsigned long client_delete_message_length =
+            sizeof("DEL ./syncdir/") + command_path_length;
+        char client_delete_message[client_delete_message_length];
+        snprintf(client_delete_message, client_delete_message_length,
+                 "DEL ./syncdir/%s", full_command + 4);
+        response_packet.length = client_delete_message_length,
+        response_packet.total_size = 1;
+        response_packet.sequence_number = 0;
+        send(client_connection, &response_packet, sizeof(packet), 0);
+        send(client_connection, client_delete_message,
+             client_delete_message_length, 0);
+      } else if (strcmp(command, "SYN") == 0) {
+        printf("Received SYN request from user %s.\n", username);
+        if (stat(username, &st) == -1) {
+          mkdir(username, 0700);
+        }
+      } else if (strcmp(command, "DLD") == 0) {
         unsigned long path_length =
             username_length + 3 + strlen(full_command + 4);
         char new_file_path[path_length];
         sprintf(new_file_path, "./%s/%s", username, full_command + 4);
-        remove(new_file_path);
-      } else if (strcmp(command, "SYN") == 0) {
-        if (stat(username, &st) == -1) {
-          mkdir(username, 0700);
-        }
+        printf("Received download request from user %s and file %s.\n",
+               username, new_file_path);
+        send_file(new_file_path, full_command + 4, username, client_connection);
       }
       break;
     }
@@ -152,28 +159,11 @@ void *handle_client_connection(void *arg) {
       unsigned long path_size = strlen((char *)(buffer + username_length)) + 1;
       char path[path_size];
       strcpy(path, (char *)(buffer + username_length));
-      unsigned long hashed_index = hash(path, 1024);
-      unsigned long total_path_size_part =
-          path_size + username_length - 1 + 3 + 5;
-      unsigned long total_path_size = path_size + username_length - 1 + 3;
-      char path_with_folder_part[total_path_size_part];
-      char path_with_folder[total_path_size];
-      snprintf(path_with_folder_part, total_path_size_part, "./%s/%s.part",
-               username, path);
-      snprintf(path_with_folder, total_path_size, "./%s/%s", username, path);
-      if (path_descriptors[hashed_index] == NULL) {
-        path_descriptors[hashed_index] = fopen(path_with_folder_part, "wb");
-      }
-
-      FILE *file = path_descriptors[hashed_index];
-      fwrite(buffer + username_length + path_size, sizeof(uint8_t),
-             packet.length - username_length - path_size, file);
-      if (packet.sequence_number == packet.total_size - 1) {
-        remove(path_with_folder);
-        rename(path_with_folder_part, path_with_folder);
-        fclose(file);
-        path_descriptors[hashed_index] = NULL;
-      }
+      unsigned long out_path_size = path_size + username_length;
+      char out_path[out_path_size];
+      snprintf(out_path, out_path_size, "%s/%s", username, path);
+      decode_file(path_descriptors, out_path, buffer, username_length, username,
+                  packet);
       break;
     }
     }

@@ -12,6 +12,7 @@ typedef enum {
 } ConnectionResult;
 
 ConnectionResult server_connect(char host[], uint16_t port);
+void *connection_handler(void *arg);
 void send_upload_message(char path[]);
 void send_download_message(char path[]);
 void send_delete_message(char path[]);

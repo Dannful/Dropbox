@@ -67,6 +67,10 @@ int main(int argc, char *argv[]) {
       char *argument = strtok(NULL, " ");
       argument[strlen(argument) - 1] = '\0';
       send_delete_message(argument);
+    } else if (strcmp(command, "download") == 0) {
+      char *argument = strtok(NULL, " ");
+      argument[strlen(argument) - 1] = '\0';
+      send_download_message(argument);
     } else if (strcmp(command, "exit") == 0) {
       close_connection();
       return 0;
