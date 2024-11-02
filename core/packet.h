@@ -1,3 +1,5 @@
+#include "hash.h"
+#include <semaphore.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -23,5 +25,3 @@ typedef enum {
 
 void send_file(char path_in[], char path_out[], char username[], int socket);
 ssize_t safe_recv(int socket, void *buffer, size_t amount, int flags);
-void decode_file(FILE *path_descriptors[], char out_path[], uint8_t buffer[],
-                 unsigned long username_length, char username[], Packet packet);

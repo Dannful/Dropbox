@@ -2,6 +2,7 @@
 #define CONNECTION_H
 
 #include "../../core/packet.h"
+#include "../../core/reader.h"
 #include <stdint.h>
 
 typedef enum {
@@ -17,5 +18,9 @@ void send_message(uint8_t bytes[], unsigned int count);
 void *handle_client_connection(void *arg);
 void *thread_listen(void *arg);
 void close_socket();
+void send_download_message(int client_connection, char path[]);
+void decode_file(Map *path_descriptors, Reader *reader,
+                 unsigned long username_length, char username[], Packet packet);
+void send_list_response(char username[], int client_connection);
 
 #endif

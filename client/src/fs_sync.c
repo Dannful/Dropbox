@@ -16,6 +16,8 @@ typedef struct {
 } FsWatch;
 
 FsWatch monitor;
+extern Map *path_descriptors;
+extern sem_t pooling_semaphore;
 
 void destroy() {
   inotify_rm_watch(monitor.socket_descriptor, monitor.watch_descriptor);
@@ -33,6 +35,12 @@ void *watcher(void *arg) {
       struct inotify_event *event = (struct inotify_event *)(buffer + head);
       if (event->len == 0)
         continue;
+      sem_wait(&pooling_semaphore);
+      if (hash_has(path_descriptors, event->name)) {
+        head += sizeof(struct inotify_event) + event->len;
+        sem_post(&pooling_semaphore);
+        continue;
+      }
       char in_dir_path[256];
       sprintf(in_dir_path, "./syncdir/%s", event->name);
       if (event->mask & IN_CREATE || event->mask & IN_MOVE ||
@@ -41,12 +49,6 @@ void *watcher(void *arg) {
         stat(in_dir_path, &path_stat);
         if (!S_ISREG(path_stat.st_mode))
           continue;
-        if (event->mask & IN_CREATE)
-          printf("create\n");
-        if (event->mask & IN_MODIFY)
-          printf("modify\n");
-        if (event->mask & IN_MOVE)
-          printf("move\n");
         printf("Changes detected: %s.\n", event->name);
         send_upload_message(in_dir_path);
       }
@@ -54,6 +56,7 @@ void *watcher(void *arg) {
         printf("Delete file: %s.\n", event->name);
         send_delete_message(event->name);
       }
+      sem_post(&pooling_semaphore);
       head += sizeof(struct inotify_event) + event->len;
     }
   }

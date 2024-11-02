@@ -7,15 +7,13 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+extern Map *path_descriptors;
+
 void deallocate() {
   close_connection();
   destroy();
-}
-
-void flush_stdin() {
-  int c;
-  while ((c = getchar()) != '\n' && c != EOF)
-    ;
+  if (path_descriptors != NULL)
+    hash_destroy(path_descriptors);
 }
 
 int main(int argc, char *argv[]) {
@@ -71,6 +69,8 @@ int main(int argc, char *argv[]) {
       char *argument = strtok(NULL, " ");
       argument[strlen(argument) - 1] = '\0';
       send_download_message(argument);
+    } else if (strcmp(command, "list_server") == 0) {
+      send_list_server_message();
     } else if (strcmp(command, "exit") == 0) {
       close_connection();
       return 0;
