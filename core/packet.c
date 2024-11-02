@@ -34,7 +34,7 @@ void send_file(char path_in[], char path_out[], char username[], int socket) {
     packet.sequence_number = current_fragment++;
     packet.total_size = fragment_count;
     Writer *writer = create_writer();
-    unsigned long timestamp = attributes.st_ctim.tv_sec;
+    unsigned long timestamp = attributes.st_mtim.tv_sec;
     write_string(writer, username);
     write_string(writer, path_out);
     write_ulong(writer, timestamp);

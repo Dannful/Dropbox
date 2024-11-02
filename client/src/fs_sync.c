@@ -35,28 +35,39 @@ void *watcher(void *arg) {
       struct inotify_event *event = (struct inotify_event *)(buffer + head);
       if (event->len == 0)
         continue;
-      sem_wait(&pooling_semaphore);
-      if (hash_has(path_descriptors, event->name)) {
-        head += sizeof(struct inotify_event) + event->len;
-        sem_post(&pooling_semaphore);
-        continue;
-      }
       char in_dir_path[256];
       sprintf(in_dir_path, "./syncdir/%s", event->name);
       if (event->mask & IN_CREATE || event->mask & IN_MOVE ||
           event->mask & IN_MODIFY) {
         struct stat path_stat;
         stat(in_dir_path, &path_stat);
-        if (!S_ISREG(path_stat.st_mode))
+        if (!S_ISREG(path_stat.st_mode)) {
+          head += sizeof(struct inotify_event) + event->len;
           continue;
+        }
+        sem_wait(&pooling_semaphore);
+        if (hash_has(path_descriptors, event->name) ||
+            access(event->name, F_OK) != 0) {
+          sem_post(&pooling_semaphore);
+          head += sizeof(struct inotify_event) + event->len;
+          continue;
+        }
         printf("Changes detected: %s.\n", event->name);
         send_upload_message(in_dir_path);
+        sem_post(&pooling_semaphore);
       }
       if (event->mask & IN_DELETE) {
+        sem_wait(&pooling_semaphore);
+        if (hash_has(path_descriptors, event->name) ||
+            access(event->name, F_OK) == 0) {
+          sem_post(&pooling_semaphore);
+          head += sizeof(struct inotify_event) + event->len;
+          continue;
+        }
         printf("Delete file: %s.\n", event->name);
         send_delete_message(event->name);
+        sem_post(&pooling_semaphore);
       }
-      sem_post(&pooling_semaphore);
       head += sizeof(struct inotify_event) + event->len;
     }
   }

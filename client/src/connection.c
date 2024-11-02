@@ -12,7 +12,6 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <unistd.h>
 #include <utime.h>
 
@@ -55,7 +54,7 @@ ConnectionResult server_connect(char host[], u_int16_t port) {
 
 void *pooling_manager(void *arg) {
   unsigned long username_length = strlen(username);
-  unsigned long amount_to_sleep = 30;
+  unsigned long amount_to_sleep = 5;
   while (1) {
     if (access("./syncdir", F_OK) != 0) {
       sleep(amount_to_sleep);
@@ -80,7 +79,7 @@ void *pooling_manager(void *arg) {
       char full_path[sizeof("./syncdir/") - 1 + file_name_length];
       sprintf(full_path, "./syncdir/%s", directory_entry->d_name);
       stat(full_path, &attributes);
-      unsigned long epoch = attributes.st_ctim.tv_sec;
+      unsigned long epoch = attributes.st_mtim.tv_sec;
       write_string(writer, directory_entry->d_name);
       write_ulong(writer, epoch);
     }
@@ -124,10 +123,11 @@ void decode_file(Reader *reader, Packet packet) {
     fclose(file);
     hash_remove(path_descriptors, out_path);
     hash_remove(path_descriptors, basename(out_path_part));
-    struct timeval new_times[2];
-    new_times[0].tv_sec = timestamp;
-    new_times[1].tv_sec = timestamp;
-    utimes(out_path, new_times);
+    struct utimbuf new_times;
+    time_t time = timestamp;
+    new_times.actime = time;
+    new_times.modtime = time;
+    utime(out_path, &new_times);
   }
   sem_post(&pooling_semaphore);
   free(out_path);

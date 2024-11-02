@@ -14,7 +14,6 @@
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 #include <utime.h>
@@ -166,27 +165,20 @@ void *handle_client_connection(void *arg) {
           char in_user_dir_path[username_length + 1 + path_size + 1];
           sprintf(in_user_dir_path, "%s/%s", username, path);
           if (access(in_user_dir_path, F_OK) != 0) {
-            hash_set(files_ok, path, NULL);
             send_download_message(client_connection, path);
-            free(path);
-            continue;
+          } else {
+            struct stat attributes;
+            stat(in_user_dir_path, &attributes);
+            if (attributes.st_mtim.tv_sec > timestamp) {
+              char out_path[sizeof("syncdir/") + path_size];
+              sprintf(out_path, "syncdir/%s", path);
+              send_file(in_user_dir_path, out_path, username,
+                        client_connection);
+            } else if (attributes.st_mtim.tv_sec < timestamp) {
+              send_download_message(client_connection, path);
+            }
           }
-          struct stat attributes;
-          stat(in_user_dir_path, &attributes);
-          if (attributes.st_ctim.tv_sec > timestamp) {
-            char out_path[sizeof("syncdir/") + path_size];
-            sprintf(out_path, "syncdir/%s", path);
-            hash_set(files_ok, path, NULL);
-            send_file(in_user_dir_path, out_path, username, client_connection);
-            free(path);
-            continue;
-          }
-          if (attributes.st_ctim.tv_sec == timestamp) {
-            hash_set(files_ok, basename(path), NULL);
-            free(path);
-            continue;
-          }
-          send_download_message(client_connection, path);
+          hash_set(files_ok, path, NULL);
           free(path);
         }
         DIR *dir = opendir(username);
@@ -252,10 +244,11 @@ void decode_file(Map *path_descriptors, Reader *reader,
     fclose(file);
     hash_remove(path_descriptors, out_path);
     hash_remove(path_descriptors, basename(out_path_part));
-    struct timeval new_times[2];
-    new_times[0].tv_sec = timestamp;
-    new_times[1].tv_sec = timestamp;
-    utimes(out_path, new_times);
+    struct utimbuf new_times;
+    time_t time = timestamp;
+    new_times.actime = time;
+    new_times.modtime = time;
+    utime(out_path, &new_times);
   }
   free(path);
 }

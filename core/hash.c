@@ -72,7 +72,7 @@ void hash_set(Map *map, const char *key, void *value) {
       bucket = bucket->next;
     }
   }
-  target->key = key;
+  target->key = strdup(key);
   target->value = value;
   target->next = NULL;
   map->count++;
@@ -92,6 +92,7 @@ void hash_remove(Map *map, const char *key) {
     bucket = bucket->next;
   Bucket *aux = bucket->next;
   bucket->next = aux->next;
+  free((void *)aux->key);
   free(aux);
   map->count--;
 }
