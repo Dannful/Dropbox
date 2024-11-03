@@ -73,6 +73,9 @@ void *pooling_manager(void *arg) {
       if (strcmp(directory_entry->d_name, ".") == 0 ||
           strcmp(directory_entry->d_name, "..") == 0)
         continue;
+      if (hash_has(path_descriptors, directory_entry->d_name)) {
+        continue;
+      }
       struct tm timestamp;
       struct stat attributes;
       unsigned long file_name_length = strlen(directory_entry->d_name);
@@ -101,28 +104,19 @@ void *pooling_manager(void *arg) {
 void decode_file(Reader *reader, Packet packet) {
   read_string(reader);
   char *out_path = read_string(reader);
-  printf("Decoding file %s: %d/%d\n", out_path, packet.sequence_number + 1,
-         packet.total_size);
-  unsigned long out_path_size = strlen(out_path);
   unsigned long username_length = strlen(username);
-  char out_path_part[out_path_size + sizeof(".part")];
-  sprintf(out_path_part, "%s.part", out_path);
   unsigned long timestamp = read_ulong(reader);
   sem_wait(&pooling_semaphore);
-  if (!hash_has(path_descriptors, out_path)) {
-    FILE *part_file = fopen(out_path_part, "wb");
-    hash_set(path_descriptors, out_path, part_file);
-    hash_set(path_descriptors, basename(out_path_part), NULL);
+  if (!hash_has(path_descriptors, basename(out_path))) {
+    FILE *file = fopen(out_path, "wb");
+    hash_set(path_descriptors, basename(out_path), file);
   }
 
-  FILE *file = hash_get(path_descriptors, out_path);
+  FILE *file = hash_get(path_descriptors, basename(out_path));
   fwrite(reader->buffer, sizeof(uint8_t), packet.length - reader->read, file);
   if (packet.sequence_number == packet.total_size - 1) {
-    remove(out_path);
-    rename(out_path_part, out_path);
     fclose(file);
-    hash_remove(path_descriptors, out_path);
-    hash_remove(path_descriptors, basename(out_path_part));
+    hash_remove(path_descriptors, basename(out_path));
     struct utimbuf new_times;
     time_t time = timestamp;
     new_times.actime = time;

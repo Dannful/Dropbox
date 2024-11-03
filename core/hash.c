@@ -18,6 +18,7 @@ Map *hash_create(void) {
   Map *map = malloc(sizeof(Map));
   map->count = 0;
   map->elements = calloc(sizeof(Bucket *), SIZE);
+  sem_init(&map->semaphore, 0, 1);
   return map;
 }
 
@@ -30,27 +31,36 @@ void hash_destroy(Map *map) {
       bucket = aux;
     }
   }
+  sem_destroy(&map->semaphore);
   free(map->elements);
   free(map);
 }
 
 void *hash_get(Map *map, const char *key) {
+  sem_wait(&map->semaphore);
   Bucket *bucket = map->elements[hash(key, SIZE)];
   while (bucket != NULL) {
-    if (strcmp(bucket->key, key) == 0)
+    if (strcmp(bucket->key, key) == 0) {
+      sem_post(&map->semaphore);
       return bucket->value;
+    }
     bucket = bucket->next;
   }
+  sem_post(&map->semaphore);
   return NULL;
 }
 
 uint8_t hash_has(Map *map, const char *key) {
+  sem_wait(&map->semaphore);
   Bucket *bucket = map->elements[hash(key, SIZE)];
   while (bucket != NULL) {
-    if (strcmp(bucket->key, key) == 0)
+    if (strcmp(bucket->key, key) == 0) {
+      sem_post(&map->semaphore);
       return 1;
+    }
     bucket = bucket->next;
   }
+  sem_post(&map->semaphore);
   return 0;
 }
 
@@ -58,6 +68,7 @@ void hash_set(Map *map, const char *key, void *value) {
   size_t index = hash(key, SIZE);
   Bucket *bucket = map->elements[index];
   Bucket *target = NULL;
+  sem_wait(&map->semaphore);
   if (bucket == NULL) {
     map->elements[index] = malloc(sizeof(Bucket));
     target = map->elements[index];
@@ -76,16 +87,19 @@ void hash_set(Map *map, const char *key, void *value) {
   target->value = value;
   target->next = NULL;
   map->count++;
+  sem_post(&map->semaphore);
 }
 
 void hash_remove(Map *map, const char *key) {
   size_t index = hash(key, SIZE);
+  sem_wait(&map->semaphore);
   Bucket *bucket = map->elements[index];
   if (bucket == NULL)
     return;
   if (strcmp(bucket->key, key) == 0) {
     map->elements[index] = bucket->next;
     free(bucket);
+    sem_post(&map->semaphore);
     return;
   }
   while (strcmp(bucket->next->key, key) != 0)
@@ -95,4 +109,5 @@ void hash_remove(Map *map, const char *key) {
   free((void *)aux->key);
   free(aux);
   map->count--;
+  sem_post(&map->semaphore);
 }

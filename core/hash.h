@@ -1,5 +1,6 @@
 #ifndef HASH_H
 #define HASH_H
+#include <semaphore.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -12,6 +13,7 @@ typedef struct bucket {
 typedef struct {
   Bucket **elements;
   size_t count;
+  sem_t semaphore;
 } Map;
 
 Map *hash_create(void);

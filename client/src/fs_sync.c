@@ -46,27 +46,23 @@ void *watcher(void *arg) {
           continue;
         }
         sem_wait(&pooling_semaphore);
-        if (hash_has(path_descriptors, event->name) ||
-            access(event->name, F_OK) != 0) {
-          sem_post(&pooling_semaphore);
+        if (hash_has(path_descriptors, event->name)) {
           head += sizeof(struct inotify_event) + event->len;
+          sem_post(&pooling_semaphore);
           continue;
         }
         printf("Changes detected: %s.\n", event->name);
-        send_upload_message(in_dir_path);
+        if (access(in_dir_path, F_OK) == 0)
+          send_upload_message(in_dir_path);
         sem_post(&pooling_semaphore);
       }
       if (event->mask & IN_DELETE) {
-        sem_wait(&pooling_semaphore);
-        if (hash_has(path_descriptors, event->name) ||
-            access(event->name, F_OK) == 0) {
-          sem_post(&pooling_semaphore);
+        if (hash_has(path_descriptors, event->name)) {
           head += sizeof(struct inotify_event) + event->len;
           continue;
         }
         printf("Delete file: %s.\n", event->name);
         send_delete_message(event->name);
-        sem_post(&pooling_semaphore);
       }
       head += sizeof(struct inotify_event) + event->len;
     }

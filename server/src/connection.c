@@ -27,6 +27,7 @@ typedef struct {
 } client;
 
 client server_client;
+Map *path_descriptors;
 
 ConnectionResult server_listen(u_int16_t port) {
   pthread_t listen_thread;
@@ -59,6 +60,8 @@ ConnectionResult server_listen(u_int16_t port) {
   printf("Server bound with socket %d. Spawning LISTEN thread...\n",
          server_client.file_descriptor);
 
+  path_descriptors = hash_create();
+
   pthread_create(&listen_thread, NULL, thread_listen, NULL);
   pthread_join(listen_thread, NULL);
 
@@ -80,6 +83,7 @@ void *thread_listen(void *arg) {
            *client_socket);
     pthread_create(&thread, NULL, handle_client_connection, client_socket);
   }
+  hash_destroy(path_descriptors);
   pthread_exit(0);
 }
 
@@ -91,7 +95,6 @@ void *handle_client_connection(void *arg) {
   int error = 0;
   socklen_t length = sizeof(error);
   unsigned int read_bytes = 0;
-  Map *path_descriptors = hash_create();
   while (1) {
     Packet packet;
     struct stat st = {0};
@@ -164,8 +167,13 @@ void *handle_client_connection(void *arg) {
           unsigned long path_size = strlen(path);
           char in_user_dir_path[username_length + 1 + path_size + 1];
           sprintf(in_user_dir_path, "%s/%s", username, path);
+          if (hash_has(path_descriptors, in_user_dir_path)) {
+            hash_set(files_ok, path, NULL);
+            free(path);
+            continue;
+          }
           if (access(in_user_dir_path, F_OK) != 0) {
-            send_download_message(client_connection, path);
+            send_delete_message(client_connection, path);
           } else {
             struct stat attributes;
             stat(in_user_dir_path, &attributes);
@@ -192,6 +200,8 @@ void *handle_client_connection(void *arg) {
           unsigned long dir_name_length = strlen(directory_entry->d_name);
           char in_path[username_length + 1 + dir_name_length];
           sprintf(in_path, "%s/%s", username, directory_entry->d_name);
+          if (hash_has(path_descriptors, in_path))
+            continue;
           char out_path[sizeof("syncdir/") + dir_name_length];
           sprintf(out_path, "syncdir/%s", directory_entry->d_name);
           send_file(in_path, out_path, username, client_connection);
@@ -205,7 +215,7 @@ void *handle_client_connection(void *arg) {
       break;
     }
     case DATA: {
-      decode_file(path_descriptors, reader, username_length, username, packet);
+      decode_file(reader, username_length, username, packet);
       break;
     }
     }
@@ -217,33 +227,26 @@ void *handle_client_connection(void *arg) {
   pthread_exit(0);
 }
 
-void decode_file(Map *path_descriptors, Reader *reader,
-                 unsigned long username_length, char username[],
+void decode_file(Reader *reader, unsigned long username_length, char username[],
                  Packet packet) {
   char *path = read_string(reader);
   unsigned long path_size = strlen(path);
   unsigned long out_path_size = path_size + username_length + 2;
   char out_path[out_path_size];
-  snprintf(out_path, out_path_size, "%s/%s", username, path);
+  sprintf(out_path, "%s/%s", username, path);
   printf("Decoding file %s: %d/%d\n", out_path, packet.sequence_number + 1,
          packet.total_size);
   unsigned long timestamp = read_ulong(reader);
-  char out_path_part[out_path_size + sizeof(".part") - 1];
-  sprintf(out_path_part, "%s.part", out_path);
   if (!hash_has(path_descriptors, out_path)) {
-    FILE *part_file = fopen(out_path_part, "wb");
-    hash_set(path_descriptors, out_path, part_file);
-    hash_set(path_descriptors, basename(out_path_part), NULL);
+    FILE *file = fopen(out_path, "wb");
+    hash_set(path_descriptors, out_path, file);
   }
 
   FILE *file = hash_get(path_descriptors, out_path);
   fwrite(reader->buffer, sizeof(uint8_t), packet.length - reader->read, file);
   if (packet.sequence_number == packet.total_size - 1) {
-    remove(out_path);
-    rename(out_path_part, out_path);
     fclose(file);
     hash_remove(path_descriptors, out_path);
-    hash_remove(path_descriptors, basename(out_path_part));
     struct utimbuf new_times;
     time_t time = timestamp;
     new_times.actime = time;
@@ -251,6 +254,22 @@ void decode_file(Map *path_descriptors, Reader *reader,
     utime(out_path, &new_times);
   }
   free(path);
+}
+
+void send_delete_message(int client_connection, char path[]) {
+  Packet response_packet;
+  response_packet.type = COMMAND;
+  unsigned long client_delete_message_length =
+      sizeof("DEL ./syncdir/") + strlen(path);
+  char client_delete_message[client_delete_message_length];
+  snprintf(client_delete_message, client_delete_message_length,
+           "DEL ./syncdir/%s", path);
+  response_packet.length = client_delete_message_length,
+  response_packet.total_size = 1;
+  response_packet.sequence_number = 0;
+  send(client_connection, &response_packet, sizeof(response_packet), 0);
+  send(client_connection, client_delete_message, client_delete_message_length,
+       0);
 }
 
 void send_download_message(int client_connection, char path[]) {
