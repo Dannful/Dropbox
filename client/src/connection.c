@@ -73,6 +73,7 @@ void *pooling_manager(void *arg) {
       if (strcmp(directory_entry->d_name, ".") == 0 ||
           strcmp(directory_entry->d_name, "..") == 0)
         continue;
+      sem_wait(&pooling_semaphore);
       if (hash_has(path_descriptors, directory_entry->d_name)) {
         continue;
       }
@@ -85,6 +86,7 @@ void *pooling_manager(void *arg) {
       unsigned long epoch = attributes.st_mtim.tv_sec;
       write_string(writer, directory_entry->d_name);
       write_ulong(writer, epoch);
+      sem_post(&pooling_semaphore);
     }
     closedir(dir);
     sync_packet.length = writer->length;

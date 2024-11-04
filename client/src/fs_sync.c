@@ -57,12 +57,14 @@ void *watcher(void *arg) {
         sem_post(&pooling_semaphore);
       }
       if (event->mask & IN_DELETE) {
+        sem_wait(&pooling_semaphore);
         if (hash_has(path_descriptors, event->name)) {
           head += sizeof(struct inotify_event) + event->len;
           continue;
         }
         printf("Delete file: %s.\n", event->name);
         send_delete_message(event->name);
+        sem_post(&pooling_semaphore);
       }
       head += sizeof(struct inotify_event) + event->len;
     }

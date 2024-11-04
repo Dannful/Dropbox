@@ -106,7 +106,8 @@ void *handle_client_connection(void *arg) {
     printf("Received message of type %d from connection %d and %d bytes.\n",
            packet.type, client_connection, packet.length);
     uint8_t buffer[packet.length];
-    safe_recv(client_connection, buffer, packet.length, 0);
+    if (safe_recv(client_connection, buffer, packet.length, 0) == 0)
+      break;
     Reader *reader = create_reader(buffer);
     char *username = read_string(reader);
     unsigned long username_length = strlen(username);
