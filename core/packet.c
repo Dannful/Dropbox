@@ -37,7 +37,6 @@ void send_file(char path_in[], char path_out[], char username[], int socket) {
     unsigned long timestamp = attributes.st_mtim.tv_sec;
     write_string(writer, username);
     write_string(writer, path_out);
-    write_ulong(writer, timestamp);
     write_bytes(writer, buffer, read_from_file);
     packet.length = writer->length;
     send(socket, &packet, sizeof(packet), 0);

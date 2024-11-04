@@ -1,6 +1,6 @@
+#include "../../core/utils.h"
 #include "../include/connection.h"
 #include "../include/fs_sync.h"
-#include "../../core/utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,7 +74,7 @@ int main(int argc, char *argv[]) {
       send_list_server_message();
     } else if (strcmp(command, "list_client") == 0) {
       char file_list_string[4096] = {0};
-      char sdyr_path[100] = "./syncdir"; 
+      char sdyr_path[100] = "./syncdir";
       generate_file_list_string(sdyr_path, file_list_string, 4096);
       printf("%s", file_list_string);
     } else if (strcmp(command, "exit") == 0) {

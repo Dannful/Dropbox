@@ -1,4 +1,7 @@
 #include "hash.h"
+#include <openssl/core.h>
+#include <openssl/evp.h>
+#include <openssl/sha.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -110,4 +113,32 @@ void hash_remove(Map *map, const char *key) {
   free(aux);
   map->count--;
   sem_post(&map->semaphore);
+}
+
+unsigned char *hash_file(char *file_name) {
+  unsigned char *result = malloc(2 * SHA_DIGEST_LENGTH);
+  unsigned char hash[SHA_DIGEST_LENGTH];
+  int i;
+  FILE *f = fopen(file_name, "rb");
+  EVP_MD_CTX *mdContent = EVP_MD_CTX_new();
+  int bytes;
+  unsigned char data[1024];
+
+  EVP_DigestInit_ex(mdContent, EVP_sha256(), NULL);
+
+  while ((bytes = fread(data, 1, 1024, f)) != 0) {
+    EVP_DigestUpdate(mdContent, data, bytes);
+  }
+
+  unsigned int length = SHA256_DIGEST_LENGTH;
+  EVP_DigestFinal(mdContent, hash, &length);
+  EVP_MD_CTX_free(mdContent);
+
+  for (i = 0; i < SHA_DIGEST_LENGTH; i++) {
+    sprintf((char *)&(result[i * 2]), "%02x", hash[i]);
+  }
+
+  fclose(f);
+
+  return result;
 }

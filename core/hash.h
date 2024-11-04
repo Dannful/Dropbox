@@ -22,4 +22,5 @@ void *hash_get(Map *map, const char *key);
 uint8_t hash_has(Map *map, const char *key);
 void hash_set(Map *map, const char *key, void *value);
 void hash_remove(Map *map, const char *key);
+unsigned char *hash_file(char *file_name);
 #endif

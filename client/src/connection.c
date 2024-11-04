@@ -77,15 +77,14 @@ void *pooling_manager(void *arg) {
       if (hash_has(path_descriptors, directory_entry->d_name)) {
         continue;
       }
-      struct tm timestamp;
       struct stat attributes;
       unsigned long file_name_length = strlen(directory_entry->d_name);
       char full_path[sizeof("./syncdir/") - 1 + file_name_length];
       sprintf(full_path, "./syncdir/%s", directory_entry->d_name);
-      stat(full_path, &attributes);
-      unsigned long epoch = attributes.st_mtim.tv_sec;
+      char *file_hash = (char *)hash_file(full_path);
       write_string(writer, directory_entry->d_name);
-      write_ulong(writer, epoch);
+      write_string(writer, file_hash);
+      free(file_hash);
       sem_post(&pooling_semaphore);
     }
     closedir(dir);
@@ -107,7 +106,6 @@ void decode_file(Reader *reader, Packet packet) {
   read_string(reader);
   char *out_path = read_string(reader);
   unsigned long username_length = strlen(username);
-  unsigned long timestamp = read_ulong(reader);
   sem_wait(&pooling_semaphore);
   if (!hash_has(path_descriptors, basename(out_path))) {
     FILE *file = fopen(out_path, "wb");
@@ -119,11 +117,6 @@ void decode_file(Reader *reader, Packet packet) {
   if (packet.sequence_number == packet.total_size - 1) {
     fclose(file);
     hash_remove(path_descriptors, basename(out_path));
-    struct utimbuf new_times;
-    time_t time = timestamp;
-    new_times.actime = time;
-    new_times.modtime = time;
-    utime(out_path, &new_times);
   }
   sem_post(&pooling_semaphore);
   free(out_path);

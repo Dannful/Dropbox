@@ -164,7 +164,7 @@ void *handle_client_connection(void *arg) {
         Map *files_ok = hash_create();
         while (reader->read < packet.length) {
           char *path = read_string(reader);
-          unsigned long timestamp = read_ulong(reader);
+          char *file_hash = read_string(reader);
           unsigned long path_size = strlen(path);
           char in_user_dir_path[username_length + 1 + path_size + 1];
           sprintf(in_user_dir_path, "%s/%s", username, path);
@@ -176,16 +176,13 @@ void *handle_client_connection(void *arg) {
           if (access(in_user_dir_path, F_OK) != 0) {
             send_delete_message(client_connection, path);
           } else {
-            struct stat attributes;
-            stat(in_user_dir_path, &attributes);
-            if (attributes.st_mtim.tv_sec > timestamp) {
-              char out_path[sizeof("syncdir/") + path_size];
-              sprintf(out_path, "syncdir/%s", path);
+            char *current_file_hash = (char *)hash_file(in_user_dir_path);
+            char out_path[sizeof("syncdir/") + path_size];
+            sprintf(out_path, "syncdir/%s", path);
+            if (strcmp(current_file_hash, file_hash) != 0)
               send_file(in_user_dir_path, out_path, username,
                         client_connection);
-            } else if (attributes.st_mtim.tv_sec < timestamp) {
-              send_download_message(client_connection, path);
-            }
+            free(current_file_hash);
           }
           hash_set(files_ok, path, NULL);
           free(path);
@@ -223,7 +220,6 @@ void *handle_client_connection(void *arg) {
     free(username);
     destroy_reader(reader);
   }
-  hash_destroy(path_descriptors);
   printf("Closing connection %d...\n", client_connection);
   pthread_exit(0);
 }
@@ -237,7 +233,6 @@ void decode_file(Reader *reader, unsigned long username_length, char username[],
   sprintf(out_path, "%s/%s", username, path);
   printf("Decoding file %s: %d/%d\n", out_path, packet.sequence_number + 1,
          packet.total_size);
-  unsigned long timestamp = read_ulong(reader);
   if (!hash_has(path_descriptors, out_path)) {
     FILE *file = fopen(out_path, "wb");
     hash_set(path_descriptors, out_path, file);
@@ -248,11 +243,6 @@ void decode_file(Reader *reader, unsigned long username_length, char username[],
   if (packet.sequence_number == packet.total_size - 1) {
     fclose(file);
     hash_remove(path_descriptors, out_path);
-    struct utimbuf new_times;
-    time_t time = timestamp;
-    new_times.actime = time;
-    new_times.modtime = time;
-    utime(out_path, &new_times);
   }
   free(path);
 }
