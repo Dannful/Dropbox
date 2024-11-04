@@ -1,5 +1,5 @@
 ./build/client: ./build ./src/*.c ./include/*.h ./../core/*
-	gcc -lm src/*.c ../core/*.c -o build/client
+	gcc src/*.c ../core/*.c -o build/client -lm
 
 ./build:
 	mkdir -p build

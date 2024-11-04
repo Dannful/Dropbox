@@ -59,8 +59,6 @@ int main(int argc, char *argv[]) {
       char *argument = strtok(NULL, " ");
       argument[strlen(argument) - 1] = '\0';
       send_upload_message(argument);
-    } else if (strcmp(command, "get_sync_dir") == 0) {
-      send_sync_dir_message();
     } else if (strcmp(command, "delete") == 0) {
       char *argument = strtok(NULL, " ");
       argument[strlen(argument) - 1] = '\0';

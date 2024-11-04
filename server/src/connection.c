@@ -301,26 +301,17 @@ void send_list_response(char username[], int client_connection) {
   uint32_t fragment_count = ceil((double)response_length / PACKET_LENGTH);
   uint32_t current_fragment = 0;
   unsigned long bytes_sent = 0;
-
-  while (bytes_sent < response_length) {
-    unsigned long chunk_length = (response_length - bytes_sent < PACKET_LENGTH)
-                                     ? (response_length - bytes_sent)
-                                     : PACKET_LENGTH;
-
-    Packet response_packet;
-    response_packet.type = COMMAND;
-    response_packet.total_size = fragment_count;
-    response_packet.sequence_number = current_fragment++;
-
-    Writer *writer = create_writer();
-    write_string(writer, "LST");
-    write_bytes(writer, response + bytes_sent, chunk_length);
-    response_packet.length = writer->length;
-    send(client_connection, &response_packet, sizeof(response_packet), 0);
-    send(client_connection, writer->buffer, writer->length, 0);
-    bytes_sent += chunk_length;
-    destroy_writer(writer);
-  }
+  Writer *writer = create_writer();
+  write_string(writer, "LST");
+  write_string(writer, response);
+  Packet response_packet;
+  response_packet.type = COMMAND;
+  response_packet.total_size = 1;
+  response_packet.sequence_number = 0;
+  response_packet.length = writer->length;
+  send(client_connection, &response_packet, sizeof(response_packet), 0);
+  send(client_connection, writer->buffer, writer->length, 0);
+  destroy_writer(writer);
 }
 
 void close_socket() { close(server_client.file_descriptor); }

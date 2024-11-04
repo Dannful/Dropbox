@@ -17,8 +17,8 @@ void destroy_writer(Writer *writer) {
 void write_bytes(Writer *writer, void *buf, size_t count) {
   if (writer->length + count > writer->capacity) {
     writer->buffer =
-        realloc(writer->buffer, writer->capacity + INITIAL_WRITER_SIZE);
-    writer->capacity += INITIAL_WRITER_SIZE;
+        realloc(writer->buffer, writer->capacity + count + INITIAL_WRITER_SIZE);
+    writer->capacity += count + INITIAL_WRITER_SIZE;
   }
   memcpy(writer->buffer + writer->length, buf, count);
   writer->length += count;

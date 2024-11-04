@@ -10,8 +10,8 @@
 
 void generate_file_list_string(char dir_path[], char buffer[],
                                size_t buffer_size) {
-  snprintf(buffer, buffer_size,
-           "File Name\t\tModification Time\t\tAccess Time\t\tCreation Time\n");
+  snprintf(buffer, buffer_size, "%-25s%-25s%-25s%-25s\n", "File Name",
+           "Modification Time", "Access Time", "Creation Time");
 
   DIR *dir = opendir(dir_path);
   if (dir == NULL) {
@@ -37,7 +37,7 @@ void generate_file_list_string(char dir_path[], char buffer[],
                  localtime(&file_stat.st_ctime));
 
         snprintf(buffer + current_length, buffer_size - current_length,
-                 "%s\t\t%s\t\t%s\t\t%s\n", entry->d_name, modified_time,
+                 "%-25s%-25s%-25s%-25s\n", entry->d_name, modified_time,
                  accessed_time, created_time);
         current_length = strlen(buffer);
       }
