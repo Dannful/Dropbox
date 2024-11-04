@@ -1,5 +1,6 @@
 #include "../include/connection.h"
 #include "../include/fs_sync.h"
+#include "../../core/utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,6 +60,8 @@ int main(int argc, char *argv[]) {
       char *argument = strtok(NULL, " ");
       argument[strlen(argument) - 1] = '\0';
       send_upload_message(argument);
+    } else if (strcmp(command, "get_sync_dir") == 0) {
+      send_sync_dir_message();
     } else if (strcmp(command, "delete") == 0) {
       char *argument = strtok(NULL, " ");
       argument[strlen(argument) - 1] = '\0';
@@ -69,6 +72,11 @@ int main(int argc, char *argv[]) {
       send_download_message(argument);
     } else if (strcmp(command, "list_server") == 0) {
       send_list_server_message();
+    } else if (strcmp(command, "list_client") == 0) {
+      char file_list_string[4096] = {0};
+      char sdyr_path[100] = "./syncdir"; 
+      generate_file_list_string(sdyr_path, file_list_string, 4096);
+      printf("%s", file_list_string);
     } else if (strcmp(command, "exit") == 0) {
       close_connection();
       return 0;
