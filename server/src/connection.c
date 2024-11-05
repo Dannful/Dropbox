@@ -114,57 +114,55 @@ void *handle_client_connection(void *arg) {
 
     switch (packet.type) {
     case COMMAND: {
-      char *full_command = read_string(reader);
+      CommandType command = read_ulong(reader);
 
-      char command[4] = {};
-      command[0] = full_command[0];
-      command[1] = full_command[1];
-      command[2] = full_command[2];
-      command[3] = '\0';
-
-      if (strcmp(command, "DEL") == 0) {
-        unsigned long command_path_length = strlen(full_command + 4);
+      switch (command) {
+      case COMMAND_DOWNLOAD: {
+        char *arguments = read_string(reader);
+        unsigned long command_path_length = strlen(arguments);
         unsigned long path_length = username_length + 4 + command_path_length;
         char new_file_path[path_length];
-        sprintf(new_file_path, "./%s/%s", username, full_command + 4);
+        sprintf(new_file_path, "./%s/%s", username, arguments);
+        printf("Received download request from user %s and file %s.\n",
+               username, new_file_path);
+        send_file(new_file_path, arguments, username, client_connection);
+        free(arguments);
+        break;
+      }
+      case COMMAND_DELETE: {
+        char *arguments = read_string(reader);
+        unsigned long command_path_length = strlen(arguments);
+        unsigned long path_length = username_length + 4 + command_path_length;
+        char new_file_path[path_length];
+        sprintf(new_file_path, "./%s/%s", username, arguments);
         printf("Received DELETE request from user %s and path %s.\n", username,
-               full_command + 4);
+               arguments);
         if (remove(new_file_path) != 0)
           break;
-
-        Packet response_packet;
-        response_packet.type = COMMAND;
-        unsigned long client_delete_message_length =
-            sizeof("DEL ./syncdir/") + command_path_length;
-        char client_delete_message[client_delete_message_length];
-        snprintf(client_delete_message, client_delete_message_length,
-                 "DEL ./syncdir/%s", full_command + 4);
-        response_packet.length = client_delete_message_length,
-        response_packet.total_size = 1;
-        response_packet.sequence_number = 0;
-        send(client_connection, &response_packet, sizeof(packet), 0);
-        send(client_connection, client_delete_message,
-             client_delete_message_length, 0);
-      } else if (strcmp(command, "SYN") == 0) {
+        send_delete_message(client_connection, arguments);
+        free(arguments);
+        break;
+      }
+      case COMMAND_LIST: {
+        printf("Received LST request from user %s.\n", username);
+        send_list_response(username, client_connection);
+        break;
+      }
+      case COMMAND_SYNC_DIR: {
         printf("Received SYN request from user %s.\n", username);
         if (stat(username, &st) == -1) {
           mkdir(username, 0700);
         }
-      } else if (strcmp(command, "DLD") == 0) {
-        unsigned long command_path_length = strlen(full_command + 4);
-        unsigned long path_length = username_length + 4 + command_path_length;
-        char new_file_path[path_length];
-        sprintf(new_file_path, "./%s/%s", username, full_command + 4);
-        printf("Received download request from user %s and file %s.\n",
-               username, new_file_path);
-        send_file(new_file_path, full_command + 4, username, client_connection);
-      } else if (strcmp(command, "CHK") == 0) {
+        break;
+      }
+      case COMMAND_CHECK: {
         printf("Received CHECK packet from user %s and %hu bytes.\n", username,
                packet.length);
         Map *files_ok = hash_create();
         while (reader->read < packet.length) {
           char *path = read_string(reader);
-          char *file_hash = read_string(reader);
+          uint8_t file_hash[HASH_ALGORITHM_BYTE_LENGTH];
+          read_u8(reader, file_hash, HASH_ALGORITHM_BYTE_LENGTH);
           unsigned long path_size = strlen(path);
           char in_user_dir_path[username_length + 1 + path_size + 1];
           sprintf(in_user_dir_path, "%s/%s", username, path);
@@ -176,10 +174,11 @@ void *handle_client_connection(void *arg) {
           if (access(in_user_dir_path, F_OK) != 0) {
             send_delete_message(client_connection, path);
           } else {
-            char *current_file_hash = (char *)hash_file(in_user_dir_path);
+            uint8_t *current_file_hash = hash_file(in_user_dir_path);
             char out_path[sizeof("syncdir/") + path_size];
             sprintf(out_path, "syncdir/%s", path);
-            if (strcmp(current_file_hash, file_hash) != 0)
+            if (memcmp(current_file_hash, file_hash,
+                       HASH_ALGORITHM_BYTE_LENGTH) != 0)
               send_file(in_user_dir_path, out_path, username,
                         client_connection);
             free(current_file_hash);
@@ -204,12 +203,11 @@ void *handle_client_connection(void *arg) {
           sprintf(out_path, "syncdir/%s", directory_entry->d_name);
           send_file(in_path, out_path, username, client_connection);
         }
+        closedir(dir);
         hash_destroy(files_ok);
-      } else if (strcmp(command, "LST") == 0) {
-        printf("Received LST request from user %s.\n", username);
-        send_list_response(username, client_connection);
+        break;
       }
-      free(full_command);
+      }
       break;
     }
     case DATA: {
@@ -251,28 +249,37 @@ void send_delete_message(int client_connection, char path[]) {
   Packet response_packet;
   response_packet.type = COMMAND;
   unsigned long client_delete_message_length =
-      sizeof("DEL ./syncdir/") + strlen(path);
+      sizeof("./syncdir/") + strlen(path);
   char client_delete_message[client_delete_message_length];
-  snprintf(client_delete_message, client_delete_message_length,
-           "DEL ./syncdir/%s", path);
-  response_packet.length = client_delete_message_length,
+  snprintf(client_delete_message, client_delete_message_length, "./syncdir/%s",
+           path);
   response_packet.total_size = 1;
   response_packet.sequence_number = 0;
+  Writer *writer = create_writer();
+  if (writer == NULL) {
+    printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+    return;
+  }
+  write_ulong(writer, COMMAND_DELETE);
+  write_string(writer, client_delete_message);
+  response_packet.length = writer->length,
   send(client_connection, &response_packet, sizeof(response_packet), 0);
-  send(client_connection, client_delete_message, client_delete_message_length,
-       0);
+  send(client_connection, writer->buffer, writer->length, 0);
+  destroy_writer(writer);
 }
 
 void send_download_message(int client_connection, char path[]) {
   Packet packet;
   packet.type = COMMAND;
-  unsigned long message_length = sizeof("DLD ") + strlen(path);
-  char delete_message[message_length];
-  sprintf(delete_message, "DLD %s", path);
-  packet.total_size = message_length;
-  packet.sequence_number = message_length;
+  packet.total_size = 1;
+  packet.sequence_number = 0;
   Writer *writer = create_writer();
-  write_string(writer, delete_message);
+  if (writer == NULL) {
+    printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+    return;
+  }
+  write_ulong(writer, COMMAND_DOWNLOAD);
+  write_string(writer, path);
   packet.length = writer->length;
   printf("Sending DOWNLOAD request for file %s...\n", path);
   send(client_connection, &packet, sizeof(packet), 0);
@@ -293,7 +300,11 @@ void send_list_response(char username[], int client_connection) {
   uint32_t current_fragment = 0;
   unsigned long bytes_sent = 0;
   Writer *writer = create_writer();
-  write_string(writer, "LST");
+  if (writer == NULL) {
+    printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+    return;
+  }
+  write_ulong(writer, COMMAND_LIST);
   write_string(writer, response);
   Packet response_packet;
   response_packet.type = COMMAND;

@@ -9,12 +9,15 @@
 #include <unistd.h>
 
 extern Map *path_descriptors;
+extern Map *file_timestamps;
 
 void deallocate() {
   close_connection();
   destroy();
   if (path_descriptors != NULL)
     hash_destroy(path_descriptors);
+  if (file_timestamps != NULL)
+    hash_destroy(file_timestamps);
 }
 
 int main(int argc, char *argv[]) {

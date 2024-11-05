@@ -5,6 +5,9 @@
 
 #define INITIAL_WRITER_SIZE 64
 
+#define FAILED_TO_CREATE_WRITER_MESSAGE                                        \
+  "Failed to create writer: out of memory\n"
+
 typedef struct {
   uint8_t *buffer;
   size_t length;

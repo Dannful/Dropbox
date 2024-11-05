@@ -1,7 +1,4 @@
 #include "hash.h"
-#include <openssl/core.h>
-#include <openssl/evp.h>
-#include <openssl/sha.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,8 +16,12 @@ size_t hash(const char *key, size_t size) {
 
 Map *hash_create(void) {
   Map *map = malloc(sizeof(Map));
+  if (map == NULL)
+    return NULL;
   map->count = 0;
   map->elements = calloc(sizeof(Bucket *), SIZE);
+  if (map->elements == NULL)
+    return NULL;
   sem_init(&map->semaphore, 0, 1);
   return map;
 }
@@ -30,6 +31,7 @@ void hash_destroy(Map *map) {
     Bucket *bucket = map->elements[i];
     while (bucket) {
       Bucket *aux = bucket->next;
+      free((void *)bucket->key);
       free(bucket);
       bucket = aux;
     }
@@ -77,8 +79,11 @@ void hash_set(Map *map, const char *key, void *value) {
     target = map->elements[index];
   }
   while (target == NULL) {
-    if (strcmp(bucket->key, key) == 0)
+    if (strcmp(bucket->key, key) == 0) {
+      bucket->value = value;
+      sem_post(&map->semaphore);
       return;
+    }
     if (bucket->next == NULL) {
       target = malloc(sizeof(Bucket));
       bucket->next = target;
@@ -115,9 +120,8 @@ void hash_remove(Map *map, const char *key) {
   sem_post(&map->semaphore);
 }
 
-unsigned char *hash_file(char *file_name) {
-  unsigned char *result = malloc(2 * SHA_DIGEST_LENGTH);
-  unsigned char hash[SHA_DIGEST_LENGTH];
+uint8_t *hash_file(char *file_name) {
+  unsigned char *hash = malloc(HASH_ALGORITHM_BYTE_LENGTH);
   int i;
   FILE *f = fopen(file_name, "rb");
   EVP_MD_CTX *mdContent = EVP_MD_CTX_new();
@@ -130,15 +134,11 @@ unsigned char *hash_file(char *file_name) {
     EVP_DigestUpdate(mdContent, data, bytes);
   }
 
-  unsigned int length = SHA256_DIGEST_LENGTH;
+  unsigned int length = HASH_ALGORITHM_BYTE_LENGTH;
   EVP_DigestFinal(mdContent, hash, &length);
   EVP_MD_CTX_free(mdContent);
 
-  for (i = 0; i < SHA_DIGEST_LENGTH; i++) {
-    sprintf((char *)&(result[i * 2]), "%02x", hash[i]);
-  }
-
   fclose(f);
 
-  return result;
+  return hash;
 }

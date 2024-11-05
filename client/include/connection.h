@@ -18,7 +18,6 @@ void send_upload_message(char path[]);
 void send_download_message(char path[]);
 void send_delete_message(char path[]);
 void send_list_server_message();
-char *send_list_client_message();
 void send_sync_dir_message();
 void close_connection();
 void set_username(char user[USERNAME_LENGTH]);

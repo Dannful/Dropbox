@@ -13,4 +13,5 @@ void destroy_reader(Reader *reader);
 
 char *read_string(Reader *reader);
 unsigned long read_ulong(Reader *reader);
+void read_u8(Reader *reader, void *buffer, size_t count);
 #endif

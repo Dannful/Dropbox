@@ -18,6 +18,7 @@
 int socket_file_descriptor = -1;
 char username[USERNAME_LENGTH];
 Map *path_descriptors = NULL;
+Map *file_timestamps = NULL;
 
 sem_t pooling_semaphore;
 
@@ -45,6 +46,7 @@ ConnectionResult server_connect(char host[], u_int16_t port) {
   }
 
   path_descriptors = hash_create();
+  file_timestamps = hash_create();
   sem_init(&pooling_semaphore, 0, 1);
   pthread_create(&handler, NULL, connection_handler, NULL);
   pthread_create(&pooling, NULL, pooling_manager, NULL);
@@ -67,8 +69,12 @@ void *pooling_manager(void *arg) {
     sync_packet.type = COMMAND;
     struct dirent *directory_entry;
     Writer *writer = create_writer();
+    if (writer == NULL) {
+      printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+      continue;
+    }
     write_string(writer, username);
-    write_string(writer, "CHK");
+    write_ulong(writer, COMMAND_CHECK);
     while ((directory_entry = readdir(dir)) != NULL) {
       if (strcmp(directory_entry->d_name, ".") == 0 ||
           strcmp(directory_entry->d_name, "..") == 0)
@@ -81,17 +87,16 @@ void *pooling_manager(void *arg) {
       unsigned long file_name_length = strlen(directory_entry->d_name);
       char full_path[sizeof("./syncdir/") - 1 + file_name_length];
       sprintf(full_path, "./syncdir/%s", directory_entry->d_name);
-      char *file_hash = (char *)hash_file(full_path);
+      uint8_t *file_hash = hash_file(full_path);
       write_string(writer, directory_entry->d_name);
-      write_string(writer, file_hash);
+      write_bytes(writer, file_hash, HASH_ALGORITHM_BYTE_LENGTH);
       free(file_hash);
       sem_post(&pooling_semaphore);
     }
     closedir(dir);
     sync_packet.length = writer->length;
     printf("Sending CHECK packet with %lu bytes...\n", writer->length);
-    if (send(socket_file_descriptor, &sync_packet, sizeof(sync_packet), 0) ==
-            0 ||
+    if (send(socket_file_descriptor, &sync_packet, sizeof(Packet), 0) == 0 ||
         send(socket_file_descriptor, writer->buffer, writer->length, 0) == 0) {
       destroy_writer(writer);
       break;
@@ -114,6 +119,10 @@ void decode_file(Reader *reader, Packet packet) {
 
   FILE *file = hash_get(path_descriptors, basename(out_path));
   fwrite(reader->buffer, sizeof(uint8_t), packet.length - reader->read, file);
+  struct stat attributes;
+  stat(out_path, &attributes);
+  hash_set(file_timestamps, basename(out_path),
+           &(unsigned long){attributes.st_mtim.tv_sec});
   if (packet.sequence_number == packet.total_size - 1) {
     fclose(file);
     hash_remove(path_descriptors, basename(out_path));
@@ -132,31 +141,38 @@ void *connection_handler(void *arg) {
     Reader *reader = create_reader(buffer);
     switch (decoded_packet.type) {
     case COMMAND: {
-      char *full_command = read_string(reader);
-      printf("Command received: %s\n", full_command);
-      char command[4] = {};
-      command[0] = full_command[0];
-      command[1] = full_command[1];
-      command[2] = full_command[2];
-      command[3] = '\0';
+      CommandType command = read_ulong(reader);
 
-      if (strcmp(command, "DEL") == 0) {
-        remove(full_command + 4);
-      } else if (strcmp(command, "DLD") == 0) {
-        unsigned long path_length =
-            sizeof("./syncdir/") + strlen(full_command + 4);
+      switch (command) {
+      case COMMAND_DOWNLOAD: {
+        char *arguments = read_string(reader);
+        unsigned long path_length = sizeof("./syncdir/") + strlen(arguments);
         char new_file_path[path_length];
-        sprintf(new_file_path, "./syncdir/%s", full_command + 4);
+        sprintf(new_file_path, "./syncdir/%s", arguments);
+        free(arguments);
         printf("Received download request for file %s.\n", new_file_path);
-        send_file(new_file_path, full_command + 4, username,
-                  socket_file_descriptor);
-      } else if (strcmp(command, "LST") == 0) {
+        send_file(new_file_path, arguments, username, socket_file_descriptor);
+        break;
+      }
+      case COMMAND_DELETE: {
+        char *arguments = read_string(reader);
+        remove(arguments);
+        free(arguments);
+        break;
+      }
+      case COMMAND_LIST: {
         char *response = read_string(reader);
-        response[decoded_packet.length] = '\0';
         printf("%s", response);
         free(response);
+        break;
       }
-      free(full_command);
+      case COMMAND_SYNC_DIR: {
+        break;
+      }
+      case COMMAND_CHECK: {
+        break;
+      }
+      }
       break;
     }
     case DATA: {
@@ -185,8 +201,12 @@ void send_list_server_message() {
   packet.total_size = 1;
   packet.sequence_number = 0;
   Writer *writer = create_writer();
+  if (writer == NULL) {
+    printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+    return;
+  }
   write_string(writer, username);
-  write_string(writer, "LST");
+  write_ulong(writer, COMMAND_LIST);
   packet.length = writer->length;
   send(socket_file_descriptor, &packet, sizeof(packet), 0);
   send(socket_file_descriptor, writer->buffer, writer->length, 0);
@@ -196,14 +216,15 @@ void send_list_server_message() {
 void send_download_message(char path[]) {
   Packet packet;
   packet.type = COMMAND;
-  unsigned long message_length = sizeof("DLD ") + strlen(path);
-  char download_message[message_length];
-  sprintf(download_message, "DLD %s", path);
   packet.total_size = 1;
   packet.sequence_number = 0;
   Writer *writer = create_writer();
+  if (writer == NULL) {
+    printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+    return;
+  }
   write_string(writer, username);
-  write_string(writer, download_message);
+  write_ulong(writer, COMMAND_DOWNLOAD);
   packet.length = writer->length;
   send(socket_file_descriptor, &packet, sizeof(packet), 0);
   send(socket_file_descriptor, writer->buffer, writer->length, 0);
@@ -213,33 +234,36 @@ void send_download_message(char path[]) {
 void send_delete_message(char path[]) {
   Packet packet;
   packet.type = COMMAND;
-  unsigned long message_length = strlen("DEL ") + strlen(path);
-  unsigned long username_length = strlen(username) + 1;
-  char delete_message[message_length];
-  sprintf(delete_message, "DEL %s", path);
-  packet.total_size = message_length;
-  packet.sequence_number = message_length;
+  packet.total_size = 1;
+  packet.sequence_number = 0;
   Writer *writer = create_writer();
+  if (writer == NULL) {
+    printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+    return;
+  }
   write_string(writer, username);
-  write_string(writer, delete_message);
+  write_ulong(writer, COMMAND_DELETE);
+  write_string(writer, path);
   packet.length = writer->length;
   send(socket_file_descriptor, &packet, sizeof(packet), 0);
   send(socket_file_descriptor, writer->buffer, writer->length, 0);
   destroy_writer(writer);
 }
 
-char *send_list_client_message();
 void send_sync_dir_message() {
   Packet packet;
   packet.type = COMMAND;
-  char message[] = "SYN";
   packet.sequence_number = 0;
   packet.total_size = 1;
   Writer *writer = create_writer();
+  if (writer == NULL) {
+    printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+    return;
+  }
   write_string(writer, username);
-  write_string(writer, "SYN");
+  write_ulong(writer, COMMAND_SYNC_DIR);
   packet.length = writer->length;
-  send(socket_file_descriptor, &packet, sizeof(packet), 0);
+  send(socket_file_descriptor, &packet, sizeof(Packet), 0);
   send(socket_file_descriptor, writer->buffer, writer->length, 0);
   destroy_writer(writer);
 }

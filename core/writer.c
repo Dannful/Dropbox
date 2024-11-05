@@ -4,7 +4,11 @@
 
 Writer *create_writer() {
   Writer *writer = malloc(sizeof(Writer));
+  if (writer == NULL)
+    return NULL;
   writer->buffer = calloc(sizeof(uint8_t), INITIAL_WRITER_SIZE);
+  if (writer->buffer == NULL)
+    return NULL;
   writer->capacity = INITIAL_WRITER_SIZE;
   writer->length = 0;
   return writer;
@@ -18,6 +22,8 @@ void write_bytes(Writer *writer, void *buf, size_t count) {
   if (writer->length + count > writer->capacity) {
     writer->buffer =
         realloc(writer->buffer, writer->capacity + count + INITIAL_WRITER_SIZE);
+    if (writer->buffer == NULL)
+      return;
     writer->capacity += count + INITIAL_WRITER_SIZE;
   }
   memcpy(writer->buffer + writer->length, buf, count);

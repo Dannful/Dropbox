@@ -8,7 +8,13 @@
 #define USERNAME_LENGTH 32
 
 typedef enum { COMMAND = 0, DATA = 1 } MessageType;
-typedef enum { DOWNLOAD = 0, DELETE = 1, LIST = 2, SYNC_DIR = 3 } CommandType;
+typedef enum {
+  COMMAND_DOWNLOAD = 0,
+  COMMAND_DELETE = 1,
+  COMMAND_LIST = 2,
+  COMMAND_SYNC_DIR = 3,
+  COMMAND_CHECK = 4
+} CommandType;
 
 typedef struct {
   MessageType type;

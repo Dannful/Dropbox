@@ -18,6 +18,7 @@ typedef struct {
 FsWatch monitor;
 extern Map *path_descriptors;
 extern sem_t pooling_semaphore;
+extern Map *file_timestamps;
 
 void destroy() {
   inotify_rm_watch(monitor.socket_descriptor, monitor.watch_descriptor);
@@ -46,12 +47,16 @@ void *watcher(void *arg) {
           continue;
         }
         sem_wait(&pooling_semaphore);
-        if (hash_has(path_descriptors, event->name)) {
+        if (hash_has(file_timestamps, event->name) &&
+            *((unsigned long *)hash_get(file_timestamps, event->name)) ==
+                path_stat.st_mtim.tv_sec) {
           head += sizeof(struct inotify_event) + event->len;
           sem_post(&pooling_semaphore);
           continue;
         }
         printf("Changes detected: %s.\n", event->name);
+        hash_set(file_timestamps, event->name,
+                 &(unsigned long){path_stat.st_mtim.tv_sec});
         if (access(in_dir_path, F_OK) == 0)
           send_upload_message(in_dir_path);
         sem_post(&pooling_semaphore);

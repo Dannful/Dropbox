@@ -34,13 +34,23 @@ void send_file(char path_in[], char path_out[], char username[], int socket) {
     packet.sequence_number = current_fragment++;
     packet.total_size = fragment_count;
     Writer *writer = create_writer();
+    if (writer == NULL) {
+      printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+      return;
+    }
     unsigned long timestamp = attributes.st_mtim.tv_sec;
     write_string(writer, username);
     write_string(writer, path_out);
     write_bytes(writer, buffer, read_from_file);
     packet.length = writer->length;
-    send(socket, &packet, sizeof(packet), 0);
-    send(socket, writer->buffer, writer->length, 0);
+    if (send(socket, &packet, sizeof(packet), 0) == 0) {
+      destroy_writer(writer);
+      break;
+    }
+    if (send(socket, writer->buffer, writer->length, 0) == 0) {
+      destroy_writer(writer);
+      break;
+    }
     destroy_writer(writer);
   }
   fclose(file);
