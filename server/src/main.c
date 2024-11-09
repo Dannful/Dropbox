@@ -2,8 +2,9 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-#define PORT 1234
+#define PORT 8080
 
 int main(void) {
   atexit(close_socket);
@@ -26,5 +27,19 @@ int main(void) {
     break;
   }
 
-  pthread_exit(0);
+  while (1) {
+    char input[1024] = {0};
+    char argument[1024] = {0};
+    while (1) {
+      fgets(input, sizeof(input), stdin);
+      printf("%s\n", input);
+      if (strcmp(input, "exit") == 0) {
+        close_socket();
+        exit(0);
+        return 0;
+      }
+    }
+  }
+
+  return 0;
 }

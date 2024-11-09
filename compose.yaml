@@ -1,0 +1,16 @@
+name: Dropbox
+services:
+  server:
+    build:
+      context: .
+      dockerfile: ./server/Dockerfile
+    ports:
+      - 0:8080
+
+  client:
+    build:
+      context: .
+      dockerfile: ./client/Dockerfile
+    command: test server 8080
+    depends_on:
+      - server
