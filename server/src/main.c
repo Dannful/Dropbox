@@ -7,7 +7,7 @@
 #define PORT 8080
 
 int main(void) {
-  atexit(close_socket);
+  atexit(deallocate);
   switch (server_listen(PORT)) {
   case SERVER_ACCEPT_FAILURE:
     printf("Server has failed to accept client connection!\n");
@@ -32,9 +32,9 @@ int main(void) {
     char argument[1024] = {0};
     while (1) {
       fgets(input, sizeof(input), stdin);
-      printf("%s\n", input);
+      char *command = strtok(input, " ");
+      command[strcspn(command, "\n")] = 0;
       if (strcmp(input, "exit") == 0) {
-        close_socket();
         exit(0);
         return 0;
       }

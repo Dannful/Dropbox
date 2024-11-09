@@ -10,5 +10,6 @@ RUN gcc -static src/*.c ../core/*.c -o build/client -lm -lcrypto
 
 FROM scratch
 COPY --from=build /app/client/build/client /app/client
+WORKDIR /app
 EXPOSE 8080
-ENTRYPOINT [ "/app/client" ]
+ENTRYPOINT [ "./client" ]

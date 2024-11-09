@@ -2,6 +2,7 @@
 #include "../include/connection.h"
 #include <pthread.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/inotify.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -17,8 +18,9 @@ typedef struct {
 
 FsWatch monitor;
 extern Map *path_descriptors;
-extern sem_t pooling_semaphore;
 extern Map *file_timestamps;
+
+extern pthread_mutex_t pooling_lock;
 
 void destroy() {
   inotify_rm_watch(monitor.socket_descriptor, monitor.watch_descriptor);
@@ -46,30 +48,35 @@ void *watcher(void *arg) {
           head += sizeof(struct inotify_event) + event->len;
           continue;
         }
-        sem_wait(&pooling_semaphore);
+        if (pthread_mutex_trylock(&pooling_lock) != 0) {
+          head += sizeof(struct inotify_event) + event->len;
+          continue;
+        }
+        pthread_mutex_unlock(&pooling_lock);
+        if (hash_has(path_descriptors, event->name)) {
+          head += sizeof(struct inotify_event) + event->len;
+          continue;
+        }
         if (hash_has(file_timestamps, event->name) &&
             *((unsigned long *)hash_get(file_timestamps, event->name)) ==
                 path_stat.st_mtim.tv_sec) {
           head += sizeof(struct inotify_event) + event->len;
-          sem_post(&pooling_semaphore);
           continue;
         }
         printf("Changes detected: %s.\n", event->name);
         hash_set(file_timestamps, event->name,
                  &(unsigned long){path_stat.st_mtim.tv_sec});
-        if (access(in_dir_path, F_OK) == 0)
+        if (access(in_dir_path, F_OK) == 0) {
           send_upload_message(in_dir_path);
-        sem_post(&pooling_semaphore);
+        }
       }
       if (event->mask & IN_DELETE) {
-        sem_wait(&pooling_semaphore);
         if (hash_has(path_descriptors, event->name)) {
           head += sizeof(struct inotify_event) + event->len;
           continue;
         }
         printf("Delete file: %s.\n", event->name);
         send_delete_message(event->name);
-        sem_post(&pooling_semaphore);
       }
       head += sizeof(struct inotify_event) + event->len;
     }

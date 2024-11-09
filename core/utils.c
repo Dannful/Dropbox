@@ -47,3 +47,8 @@ void generate_file_list_string(char dir_path[], char buffer[],
 
   printf("Generated file list:\n%s\n", buffer);
 }
+
+void bytes_to_string(char *out, uint8_t *bytes, size_t count) {
+  for (int i = 0; i < count; i++)
+    sprintf((char *)&(out[i * 2]), "%02x", bytes[i]);
+}

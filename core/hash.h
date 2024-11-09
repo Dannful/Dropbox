@@ -22,10 +22,11 @@ typedef struct {
 } Map;
 
 Map *hash_create(void);
+void hash_free_content(Map *map);
 void hash_destroy(Map *map);
 void *hash_get(Map *map, const char *key);
 uint8_t hash_has(Map *map, const char *key);
 void hash_set(Map *map, const char *key, void *value);
 void hash_remove(Map *map, const char *key);
-uint8_t *hash_file(char *file_name);
+void hash_file(void *out, char *file_name);
 #endif

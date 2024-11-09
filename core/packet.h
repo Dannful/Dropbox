@@ -29,5 +29,12 @@ typedef enum {
   PACKET_SEND_SOCKET_CLOSED = 1,
 } PacketSendResult;
 
-void send_file(char path_in[], char path_out[], char username[], int socket);
+typedef struct {
+  char *path_in;
+  char *path_out;
+  char *username;
+  Map *hash;
+  int socket;
+} FileData;
+
 ssize_t safe_recv(int socket, void *buffer, size_t amount, int flags);

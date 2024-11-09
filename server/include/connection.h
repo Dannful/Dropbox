@@ -13,6 +13,11 @@ typedef enum {
   SERVER_CONNECTION_SUCCESS = 0
 } ConnectionResult;
 
+typedef struct {
+  pthread_mutex_t send_file_lock;
+  pthread_mutex_t check_lock;
+} UserLocks;
+
 ConnectionResult server_listen(uint16_t port);
 void send_message(uint8_t bytes[], unsigned int count);
 void *handle_client_connection(void *arg);
@@ -23,5 +28,8 @@ void send_delete_message(int client_connection, char path[]);
 void decode_file(Reader *reader, unsigned long username_length, char username[],
                  Packet packet);
 void send_list_response(char username[], int client_connection);
-
+void send_upload_message(int client_connection, char username[], char path_in[],
+                         char path_out[]);
+void deallocate();
+void *send_file(void *arg);
 #endif

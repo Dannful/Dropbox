@@ -10,6 +10,7 @@
 
 extern Map *path_descriptors;
 extern Map *file_timestamps;
+extern Map *files_writing;
 
 void deallocate() {
   close_connection();
@@ -18,12 +19,16 @@ void deallocate() {
     hash_destroy(path_descriptors);
   if (file_timestamps != NULL)
     hash_destroy(file_timestamps);
+  if (files_writing != NULL)
+    hash_destroy(files_writing);
 }
 
 int main(int argc, char *argv[]) {
   atexit(deallocate);
   set_username(argv[1]);
-  switch (server_connect(argv[2], atoi(argv[3]))) {
+  set_server_data(argv[2], atoi(argv[3]));
+
+  switch (open_control_connection()) {
   case CONNECTION_INVALID_ADDRESS:
     printf("The supplied server address is invalid!\n");
     return 1;
@@ -60,6 +65,7 @@ int main(int argc, char *argv[]) {
     command[strcspn(command, "\n")] = 0;
 
     if (strcmp(command, "upload") == 0) {
+      pthread_t upload;
       char *argument = strtok(NULL, " ");
       argument[strlen(argument) - 1] = '\0';
       send_upload_message(argument);
@@ -72,7 +78,7 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(command, "download") == 0) {
       char *argument = strtok(NULL, " ");
       argument[strlen(argument) - 1] = '\0';
-      send_download_message(argument);
+      send_download_message(argument, 0);
     } else if (strcmp(command, "list_server") == 0) {
       send_list_server_message();
     } else if (strcmp(command, "list_client") == 0) {

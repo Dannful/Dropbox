@@ -1,10 +1,13 @@
 #include "../include/connection.h"
 #include "../../core/hash.h"
 #include "../../core/reader.h"
+#include "../../core/utils.h"
 #include "../../core/writer.h"
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <libgen.h>
+#include <math.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -15,43 +18,70 @@
 #include <unistd.h>
 #include <utime.h>
 
-int socket_file_descriptor = -1;
+int control_connection = -1;
 char username[USERNAME_LENGTH];
+char hostname[253];
+uint16_t server_port;
+
 Map *path_descriptors = NULL;
 Map *file_timestamps = NULL;
+Map *files_writing = NULL;
 
-sem_t pooling_semaphore;
+pthread_mutex_t pooling_lock;
 
-ConnectionResult server_connect(char host[], u_int16_t port) {
-  socket_file_descriptor = socket(AF_INET, SOCK_STREAM, 0);
+void set_server_data(char host[], uint16_t port) {
+  strcpy(hostname, host);
+  server_port = port;
+}
+
+ConnectionResult open_connection(int *fd) {
+  *fd = socket(AF_INET, SOCK_STREAM, 0);
   int status;
   struct sockaddr_in server_address;
   pthread_t handler, pooling;
 
-  if (socket_file_descriptor < 0) {
+  if (*fd < 0) {
     return CONNECTION_SOCKET_FAILRUE;
   }
 
-  server_address.sin_family = AF_INET;
-  server_address.sin_port = htons(port);
+  struct addrinfo hints = {0}, *res;
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_protocol = IPPROTO_TCP;
+  if (getaddrinfo(hostname, NULL, &hints, &res) != 0)
+    return CONNECTION_INVALID_ADDRESS;
 
-  if (inet_pton(AF_INET, host, &server_address.sin_addr) <= 0) {
+  server_address.sin_family = AF_INET;
+  server_address.sin_port = htons(server_port);
+
+  if (inet_pton(AF_INET,
+                inet_ntoa(((struct sockaddr_in *)res->ai_addr)->sin_addr),
+                &server_address.sin_addr) <= 0) {
     return CONNECTION_INVALID_ADDRESS;
   }
 
-  if ((status =
-           connect(socket_file_descriptor, (struct sockaddr *)&server_address,
-                   sizeof(server_address))) < 0) {
+  if ((status = connect(*fd, (struct sockaddr *)&server_address,
+                        sizeof(server_address))) < 0) {
     return CONNECT_FAILURE;
   }
 
-  path_descriptors = hash_create();
-  file_timestamps = hash_create();
-  sem_init(&pooling_semaphore, 0, 1);
-  pthread_create(&handler, NULL, connection_handler, NULL);
-  pthread_create(&pooling, NULL, pooling_manager, NULL);
-
   return SERVER_CONNECTION_SUCCESS;
+}
+
+ConnectionResult open_control_connection() {
+  ConnectionResult result = open_connection(&control_connection);
+  if (result == SERVER_CONNECTION_SUCCESS) {
+    pthread_t handler, pooling;
+    path_descriptors = hash_create();
+    file_timestamps = hash_create();
+    files_writing = hash_create();
+
+    pthread_mutex_init(&pooling_lock, NULL);
+
+    pthread_create(&handler, NULL, control_connection_handler, NULL);
+    pthread_create(&pooling, NULL, pooling_manager, NULL);
+  }
+  return result;
 }
 
 void *pooling_manager(void *arg) {
@@ -62,11 +92,11 @@ void *pooling_manager(void *arg) {
       sleep(amount_to_sleep);
       continue;
     }
-    Packet sync_packet;
+    Packet check_packet;
     DIR *dir = opendir("./syncdir");
-    sync_packet.sequence_number = 0;
-    sync_packet.total_size = 1;
-    sync_packet.type = COMMAND;
+    check_packet.sequence_number = 0;
+    check_packet.total_size = 1;
+    check_packet.type = COMMAND;
     struct dirent *directory_entry;
     Writer *writer = create_writer();
     if (writer == NULL) {
@@ -79,25 +109,34 @@ void *pooling_manager(void *arg) {
       if (strcmp(directory_entry->d_name, ".") == 0 ||
           strcmp(directory_entry->d_name, "..") == 0)
         continue;
-      sem_wait(&pooling_semaphore);
+      pthread_mutex_lock(&pooling_lock);
       if (hash_has(path_descriptors, directory_entry->d_name)) {
+        pthread_mutex_unlock(&pooling_lock);
         continue;
       }
       struct stat attributes;
       unsigned long file_name_length = strlen(directory_entry->d_name);
       char full_path[sizeof("./syncdir/") - 1 + file_name_length];
       sprintf(full_path, "./syncdir/%s", directory_entry->d_name);
-      uint8_t *file_hash = hash_file(full_path);
+      if (hash_has(files_writing, full_path)) {
+        pthread_mutex_unlock(&pooling_lock);
+        continue;
+      }
+      uint8_t file_hash[HASH_ALGORITHM_BYTE_LENGTH];
+      hash_file(file_hash, full_path);
+      char file_hash_string[HASH_ALGORITHM_BYTE_LENGTH * 2 + 1] = {0};
+      bytes_to_string(file_hash_string, file_hash, HASH_ALGORITHM_BYTE_LENGTH);
+      printf("Including file %s in CHECK with hash %s\n",
+             directory_entry->d_name, file_hash_string);
       write_string(writer, directory_entry->d_name);
       write_bytes(writer, file_hash, HASH_ALGORITHM_BYTE_LENGTH);
-      free(file_hash);
-      sem_post(&pooling_semaphore);
+      pthread_mutex_unlock(&pooling_lock);
     }
     closedir(dir);
-    sync_packet.length = writer->length;
+    check_packet.length = writer->length;
     printf("Sending CHECK packet with %lu bytes...\n", writer->length);
-    if (send(socket_file_descriptor, &sync_packet, sizeof(Packet), 0) == 0 ||
-        send(socket_file_descriptor, writer->buffer, writer->length, 0) == 0) {
+    if (send(control_connection, &check_packet, sizeof(Packet), 0) == 0 ||
+        send(control_connection, writer->buffer, writer->length, 0) == 0) {
       destroy_writer(writer);
       break;
     }
@@ -107,16 +146,19 @@ void *pooling_manager(void *arg) {
   pthread_exit(0);
 }
 
-void decode_file(Reader *reader, Packet packet) {
+uint8_t decode_file(Reader *reader, Packet packet) {
   read_string(reader);
   char *out_path = read_string(reader);
   unsigned long username_length = strlen(username);
-  sem_wait(&pooling_semaphore);
+  pthread_mutex_lock(&pooling_lock);
   if (!hash_has(path_descriptors, basename(out_path))) {
     FILE *file = fopen(out_path, "wb");
     hash_set(path_descriptors, basename(out_path), file);
   }
+  pthread_mutex_unlock(&pooling_lock);
 
+  printf("Decoding %hu bytes for file %s: %d/%d\n", packet.length, out_path,
+         packet.sequence_number + 1, packet.total_size);
   FILE *file = hash_get(path_descriptors, basename(out_path));
   fwrite(reader->buffer, sizeof(uint8_t), packet.length - reader->read, file);
   struct stat attributes;
@@ -126,73 +168,106 @@ void decode_file(Reader *reader, Packet packet) {
   if (packet.sequence_number == packet.total_size - 1) {
     fclose(file);
     hash_remove(path_descriptors, basename(out_path));
+    free(out_path);
+    return 0;
   }
-  sem_post(&pooling_semaphore);
   free(out_path);
+  return 1;
 }
 
-void *connection_handler(void *arg) {
+void *control_connection_handler(void *arg) {
   Packet decoded_packet;
 
-  while (safe_recv(socket_file_descriptor, &decoded_packet,
-                   sizeof(decoded_packet), 0) > 0) {
+  while (safe_recv(control_connection, &decoded_packet, sizeof(decoded_packet),
+                   0) > 0) {
     uint8_t buffer[decoded_packet.length];
-    safe_recv(socket_file_descriptor, buffer, decoded_packet.length, 0);
+    if (safe_recv(control_connection, buffer, decoded_packet.length, 0) == 0)
+      break;
     Reader *reader = create_reader(buffer);
-    switch (decoded_packet.type) {
-    case COMMAND: {
-      CommandType command = read_ulong(reader);
+    CommandType command = read_ulong(reader);
 
-      switch (command) {
-      case COMMAND_DOWNLOAD: {
-        char *arguments = read_string(reader);
-        unsigned long path_length = sizeof("./syncdir/") + strlen(arguments);
-        char new_file_path[path_length];
-        sprintf(new_file_path, "./syncdir/%s", arguments);
-        free(arguments);
-        printf("Received download request for file %s.\n", new_file_path);
-        send_file(new_file_path, arguments, username, socket_file_descriptor);
-        break;
-      }
-      case COMMAND_DELETE: {
-        char *arguments = read_string(reader);
-        remove(arguments);
-        free(arguments);
-        break;
-      }
-      case COMMAND_LIST: {
-        char *response = read_string(reader);
-        printf("%s", response);
-        free(response);
-        break;
-      }
-      case COMMAND_SYNC_DIR: {
-        break;
-      }
-      case COMMAND_CHECK: {
-        break;
-      }
+    switch (command) {
+    case COMMAND_DOWNLOAD: {
+      char *arguments = read_string(reader);
+      unsigned long path_length = sizeof("./syncdir/") + strlen(arguments);
+      char new_file_path[path_length];
+      sprintf(new_file_path, "./syncdir/%s", arguments);
+      free(arguments);
+      printf("Received download request for file %s.\n", new_file_path);
+      send_upload_message(new_file_path);
+      break;
+    }
+    case COMMAND_DELETE: {
+      char *arguments = read_string(reader);
+      remove(arguments);
+      free(arguments);
+      break;
+    }
+    case COMMAND_LIST: {
+      char *response = read_string(reader);
+      printf("%s", response);
+      free(response);
+      break;
+    }
+    case COMMAND_SYNC_DIR: {
+      break;
+    }
+    case COMMAND_CHECK: {
+      printf("Received CHECK response from server with %d bytes.\n",
+             decoded_packet.length);
+      while (reader->read < decoded_packet.length) {
+        char *path = read_string(reader);
+        send_download_message(path, 1);
+        free(path);
       }
       break;
     }
-    case DATA: {
-      decode_file(reader, decoded_packet);
-      break;
+      destroy_reader(reader);
     }
+  }
+  return 0;
+}
+
+void *download_connection_handler(void *arg) {
+  int connection = *((int *)arg);
+  free(arg);
+  printf("bru %d\n", connection);
+  while (1) {
+    Packet packet;
+    if (safe_recv(connection, &packet, sizeof(packet), 0) == 0)
+      break;
+    uint8_t buffer[packet.length];
+    if (safe_recv(connection, buffer, packet.length, 0) == 0)
+      break;
+    Reader *reader = create_reader(buffer);
+    if (decode_file(reader, packet) == 0) {
+      destroy_reader(reader);
+      break;
     }
     destroy_reader(reader);
   }
-  pthread_exit(0);
+  close(connection);
+  return 0;
 }
 
 void send_upload_message(char path[]) {
-  if (socket_file_descriptor == -1) {
-    printf("The connection has not been established!");
-    exit(1);
+  char *base_path = basename(path);
+  if (access(path, F_OK) != 0)
+    return;
+  int new_connection;
+  ConnectionResult result = open_connection(&new_connection);
+  if (result != SERVER_CONNECTION_SUCCESS) {
+    printf("Failed to connect to server.\n");
     return;
   }
-  char *base_path = basename(path);
-  send_file(path, base_path, username, socket_file_descriptor);
+  pthread_t upload;
+  FileData *data = malloc(sizeof(FileData));
+  data->path_in = strdup(path);
+  data->username = strdup(username);
+  data->path_out = strdup(base_path);
+  data->socket = new_connection;
+  data->hash = files_writing;
+  pthread_create(&upload, NULL, send_file, data);
 }
 
 void send_list_server_message() {
@@ -208,12 +283,18 @@ void send_list_server_message() {
   write_string(writer, username);
   write_ulong(writer, COMMAND_LIST);
   packet.length = writer->length;
-  send(socket_file_descriptor, &packet, sizeof(packet), 0);
-  send(socket_file_descriptor, writer->buffer, writer->length, 0);
+  send(control_connection, &packet, sizeof(packet), 0);
+  send(control_connection, writer->buffer, writer->length, 0);
   destroy_writer(writer);
 }
 
-void send_download_message(char path[]) {
+void send_download_message(char path[], uint8_t sync) {
+  int *new_connection = malloc(sizeof(int));
+  ConnectionResult result = open_connection(new_connection);
+  if (result != SERVER_CONNECTION_SUCCESS) {
+    printf("Failed to open connection for download.\n");
+    return;
+  }
   Packet packet;
   packet.type = COMMAND;
   packet.total_size = 1;
@@ -225,9 +306,15 @@ void send_download_message(char path[]) {
   }
   write_string(writer, username);
   write_ulong(writer, COMMAND_DOWNLOAD);
+  write_bytes(writer, &sync, sizeof(sync));
+  write_string(writer, path);
   packet.length = writer->length;
-  send(socket_file_descriptor, &packet, sizeof(packet), 0);
-  send(socket_file_descriptor, writer->buffer, writer->length, 0);
+  send(*new_connection, &packet, sizeof(packet), 0);
+  send(*new_connection, writer->buffer, writer->length, 0);
+  pthread_t download_handler;
+  printf("Sending download message for file %s...\n", path);
+  pthread_create(&download_handler, NULL, download_connection_handler,
+                 new_connection);
   destroy_writer(writer);
 }
 
@@ -245,8 +332,8 @@ void send_delete_message(char path[]) {
   write_ulong(writer, COMMAND_DELETE);
   write_string(writer, path);
   packet.length = writer->length;
-  send(socket_file_descriptor, &packet, sizeof(packet), 0);
-  send(socket_file_descriptor, writer->buffer, writer->length, 0);
+  send(control_connection, &packet, sizeof(packet), 0);
+  send(control_connection, writer->buffer, writer->length, 0);
   destroy_writer(writer);
 }
 
@@ -263,17 +350,100 @@ void send_sync_dir_message() {
   write_string(writer, username);
   write_ulong(writer, COMMAND_SYNC_DIR);
   packet.length = writer->length;
-  send(socket_file_descriptor, &packet, sizeof(Packet), 0);
-  send(socket_file_descriptor, writer->buffer, writer->length, 0);
+  send(control_connection, &packet, sizeof(Packet), 0);
+  send(control_connection, writer->buffer, writer->length, 0);
   destroy_writer(writer);
 }
 
 void close_connection() {
-  if (socket_file_descriptor == -1) {
+  if (control_connection == -1) {
     printf("The connection has not been established!");
     return;
   }
-  close(socket_file_descriptor);
+  close(control_connection);
+}
+
+void *send_file(void *arg) {
+  FileData file_data;
+  memmove(&file_data, arg, sizeof(FileData));
+  free(arg);
+  hash_set(file_data.hash, file_data.path_in, NULL);
+  FILE *file = fopen(file_data.path_in, "rb");
+  fseek(file, 0, SEEK_END);
+  unsigned long file_size = ftell(file);
+  rewind(file);
+  printf("Beginning file read...\n");
+  if (file_size == 0) {
+    Packet packet;
+    packet.total_size = 1;
+    packet.sequence_number = 0;
+    packet.length = 0;
+    packet.type = DATA;
+    Writer *writer = create_writer();
+    write_string(writer, file_data.username);
+    write_string(writer, file_data.path_out);
+    packet.length = writer->length;
+    send(file_data.socket, &packet, sizeof(packet), 0);
+    send(file_data.socket, writer->buffer, writer->length, 0);
+    fclose(file);
+    hash_remove(file_data.hash, file_data.path_in);
+    free(file_data.path_in);
+    free(file_data.path_out);
+    free(file_data.username);
+    destroy_writer(writer);
+    return 0;
+  }
+  uint32_t fragment_count = ceil((double)file_size / PACKET_LENGTH);
+  unsigned long username_length = strlen(file_data.username) + 1;
+  unsigned long path_size = strlen(file_data.path_out) + 1;
+  unsigned long bytes_read = 0;
+  uint32_t current_fragment = 0;
+  int counter = 0;
+  while (bytes_read < file_size) {
+    unsigned int buffer_size = PACKET_LENGTH;
+    uint8_t buffer[buffer_size];
+    Packet packet;
+    unsigned long read_from_file =
+        fread(buffer, sizeof(uint8_t), buffer_size, file);
+    if (read_from_file == 0) {
+      printf("Could not read anything from %s.\n", file_data.path_in);
+      break;
+    }
+    bytes_read += read_from_file;
+    packet.type = DATA;
+    packet.sequence_number = current_fragment++;
+    packet.total_size = fragment_count;
+    Writer *writer = create_writer();
+    if (writer == NULL) {
+      printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+      break;
+    }
+    write_string(writer, file_data.username);
+    write_string(writer, file_data.path_out);
+    write_bytes(writer, buffer, read_from_file);
+    packet.length = writer->length;
+    printf("Sending %lu bytes of file %s to %s at %s: %d/%d\n", read_from_file,
+           file_data.path_in, file_data.username, file_data.path_out,
+           packet.sequence_number + 1, packet.total_size);
+    if (send(file_data.socket, &packet, sizeof(packet), 0) == 0) {
+      printf("Failed to send file %s: socket closed.\n", file_data.path_in);
+      destroy_writer(writer);
+      break;
+    }
+    if (send(file_data.socket, writer->buffer, writer->length, 0) == 0) {
+      printf("Failed to send file %s: socket closed.\n", file_data.path_in);
+      destroy_writer(writer);
+      break;
+    }
+    destroy_writer(writer);
+  }
+  printf("Closing file %s...\n", file_data.path_in);
+  fclose(file);
+  hash_remove(file_data.hash, file_data.path_in);
+  free(file_data.path_out);
+  free(file_data.username);
+  free(file_data.path_in);
+  return 0;
 }
 
 void set_username(char user[USERNAME_LENGTH]) { strcpy(username, user); }

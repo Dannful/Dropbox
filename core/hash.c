@@ -120,8 +120,7 @@ void hash_remove(Map *map, const char *key) {
   sem_post(&map->semaphore);
 }
 
-uint8_t *hash_file(char *file_name) {
-  unsigned char *hash = malloc(HASH_ALGORITHM_BYTE_LENGTH);
+void hash_file(void *out, char *file_name) {
   int i;
   FILE *f = fopen(file_name, "rb");
   EVP_MD_CTX *mdContent = EVP_MD_CTX_new();
@@ -135,10 +134,18 @@ uint8_t *hash_file(char *file_name) {
   }
 
   unsigned int length = HASH_ALGORITHM_BYTE_LENGTH;
-  EVP_DigestFinal(mdContent, hash, &length);
+  EVP_DigestFinal(mdContent, out, &length);
   EVP_MD_CTX_free(mdContent);
 
   fclose(f);
+}
 
-  return hash;
+void hash_free_content(Map *map) {
+  for (int i = 0; i < SIZE; i++) {
+    Bucket *bucket = map->elements[i];
+    while (bucket != NULL) {
+      free(bucket->value);
+      bucket = bucket->next;
+    }
+  }
 }

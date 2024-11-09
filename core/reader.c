@@ -28,5 +28,6 @@ unsigned long read_ulong(Reader *reader) {
 
 void read_u8(Reader *reader, void *buffer, size_t count) {
   memcpy(buffer, reader->buffer, count);
+  reader->buffer += count;
   reader->read += count;
 }
