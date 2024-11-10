@@ -123,32 +123,30 @@ void *handle_client_connection(void *arg) {
         read_u8(reader, &sync, sizeof(sync));
         char *arguments = read_string(reader);
         unsigned long command_path_length = strlen(arguments);
-        unsigned long path_length = username_length + 2 + command_path_length;
-        char new_file_path[path_length];
-        sprintf(new_file_path, "%s/%s", username, arguments);
+        char *new_file_path = get_user_file(username, arguments);
         printf("Received download request from user %s and file %s.\n",
                username, new_file_path);
-        char in_sync_dir[sizeof("./syncdir/") + command_path_length];
-        sprintf(in_sync_dir, "./syncdir/%s", arguments);
-        List *list = hash_get(files_writing, new_file_path);
-        if (list == NULL || !list_contains(list, username, username_length))
+        char *in_sync_dir = get_user_syncdir_file(arguments);
+        if (!hash_has(path_descriptors, new_file_path)) {
           send_upload_message(client_connection, username, new_file_path,
                               sync ? in_sync_dir : arguments);
+        }
         free(arguments);
+        free(new_file_path);
+        free(in_sync_dir);
         break;
       }
       case COMMAND_DELETE: {
         char *arguments = read_string(reader);
         unsigned long command_path_length = strlen(arguments);
-        unsigned long path_length = username_length + 4 + command_path_length;
-        char new_file_path[path_length];
-        sprintf(new_file_path, "./%s/%s", username, arguments);
+        char *new_file_path = get_user_file(username, arguments);
         printf("Received DELETE request from user %s and path %s.\n", username,
                arguments);
         if (remove(new_file_path) != 0)
           break;
         send_delete_message(client_connection, arguments);
         free(arguments);
+        free(new_file_path);
         break;
       }
       case COMMAND_LIST: {
@@ -185,13 +183,12 @@ void *handle_client_connection(void *arg) {
                           HASH_ALGORITHM_BYTE_LENGTH);
           printf("Checking file %s with hash %s\n", path, file_hash_string);
           unsigned long path_size = strlen(path);
-          char in_user_dir_path[username_length + 1 + path_size + 1];
-          sprintf(in_user_dir_path, "%s/%s", username, path);
+          char *in_user_dir_path = get_user_file(username, path);
           List *list = hash_get(files_writing, in_user_dir_path);
-          if (hash_has(path_descriptors, in_user_dir_path) ||
-              list != NULL && list_contains(list, username, username_length)) {
+          if (hash_has(path_descriptors, in_user_dir_path)) {
             hash_set(files_ok, path, NULL);
             free(path);
+            free(in_user_dir_path);
             continue;
           }
           if (access(in_user_dir_path, F_OK) != 0) {
@@ -199,16 +196,17 @@ void *handle_client_connection(void *arg) {
           } else {
             uint8_t current_file_hash[HASH_ALGORITHM_BYTE_LENGTH] = {0};
             hash_file(current_file_hash, in_user_dir_path);
-            char out_path[sizeof("syncdir/") + path_size];
-            sprintf(out_path, "syncdir/%s", path);
+            char *out_path = get_user_syncdir_file(path);
             if (memcmp(current_file_hash, file_hash,
                        HASH_ALGORITHM_BYTE_LENGTH) != 0) {
               printf("Including file %s in CHECK response.\n", path);
               write_string(out, path);
             }
+            free(out_path);
           }
           hash_set(files_ok, path, NULL);
           free(path);
+          free(in_user_dir_path);
         }
         DIR *dir = opendir(username);
         struct dirent *directory_entry;
@@ -218,16 +216,14 @@ void *handle_client_connection(void *arg) {
             continue;
           if (hash_has(files_ok, directory_entry->d_name))
             continue;
-          unsigned long dir_name_length = strlen(directory_entry->d_name);
-          char in_path[username_length + 1 + dir_name_length];
-          sprintf(in_path, "%s/%s", username, directory_entry->d_name);
-          List *list = hash_get(files_writing, in_path);
-          if (hash_has(path_descriptors, in_path) ||
-              list != NULL && list_contains(list, username, username_length))
+          char *in_folder = get_user_file(username, directory_entry->d_name);
+          if (hash_has(path_descriptors, in_folder) ||
+              hash_has(files_writing, in_folder))
             continue;
           write_string(out, directory_entry->d_name);
           printf("Including file %s in CHECK response.\n",
                  directory_entry->d_name);
+          free(in_folder);
         }
         Packet response;
         response.type = COMMAND;
@@ -261,10 +257,14 @@ void *handle_client_connection(void *arg) {
 void decode_file(Reader *reader, unsigned long username_length, char username[],
                  Packet packet) {
   char *path = read_string(reader);
+  char *user_folder = get_user_file(username, path);
+  while (hash_has(files_writing, user_folder))
+    ;
+  free(user_folder);
   unsigned long path_size = strlen(path);
-  unsigned long out_path_size = path_size + username_length + 2;
-  char out_path[out_path_size];
-  sprintf(out_path, "%s/%s", username, path);
+  char *out_path = get_user_file(username, path);
+  while (packet.sequence_number == 0 && hash_has(path_descriptors, out_path))
+    ;
   printf("Decoding %hu bytes for file %s: %d/%d\n", packet.length, out_path,
          packet.sequence_number + 1, packet.total_size);
   if (packet.length == username_length + 1 + path_size + 1) {
@@ -284,6 +284,7 @@ void decode_file(Reader *reader, unsigned long username_length, char username[],
     fclose(file);
     hash_remove(path_descriptors, out_path);
   }
+  free(out_path);
   free(path);
 }
 
@@ -370,108 +371,6 @@ void send_list_response(char username[], int client_connection) {
   destroy_writer(writer);
 }
 
-void *send_file(void *arg) {
-  FileData file_data;
-  memmove(&file_data, arg, sizeof(FileData));
-  free(arg);
-  if (!hash_has(file_data.hash, file_data.path_in)) {
-    List *list = create_list();
-    list_add(list, file_data.username, strlen(file_data.username) + 1);
-    hash_set(file_data.hash, file_data.path_in, list);
-  } else {
-    List *list = (List *)hash_get(file_data.hash, file_data.path_in);
-    list_add(list, file_data.username, strlen(file_data.username) + 1);
-  }
-  FILE *file = fopen(file_data.path_in, "rb");
-  fseek(file, 0, SEEK_END);
-  unsigned long file_size = ftell(file);
-  rewind(file);
-  printf("Beginning file read...\n");
-  if (file_size == 0) {
-    Packet packet;
-    packet.total_size = 1;
-    packet.sequence_number = 0;
-    packet.length = 0;
-    packet.type = DATA;
-    Writer *writer = create_writer();
-    write_string(writer, file_data.username);
-    write_string(writer, file_data.path_out);
-    packet.length = writer->length;
-    send(file_data.socket, &packet, sizeof(packet), 0);
-    send(file_data.socket, writer->buffer, writer->length, 0);
-    fclose(file);
-    uint8_t *value = (uint8_t *)hash_get(file_data.hash, file_data.path_in);
-    hash_remove(file_data.hash, file_data.path_in);
-    if (*value > 1) {
-      *value = *value - 1;
-      hash_set(file_data.hash, file_data.path_in, value);
-    } else {
-      free(value);
-    }
-    free(file_data.path_in);
-    free(file_data.path_out);
-    free(file_data.username);
-    destroy_writer(writer);
-    return 0;
-  }
-  uint32_t fragment_count = ceil((double)file_size / PACKET_LENGTH);
-  unsigned long username_length = strlen(file_data.username) + 1;
-  unsigned long path_size = strlen(file_data.path_out) + 1;
-  unsigned long bytes_read = 0;
-  uint32_t current_fragment = 0;
-  int counter = 0;
-  while (bytes_read < file_size) {
-    unsigned int buffer_size = PACKET_LENGTH;
-    uint8_t buffer[buffer_size];
-    Packet packet;
-    unsigned long read_from_file =
-        fread(buffer, sizeof(uint8_t), buffer_size, file);
-    if (read_from_file == 0) {
-      printf("Could not read anything from %s.\n", file_data.path_in);
-      break;
-    }
-    bytes_read += read_from_file;
-    packet.type = DATA;
-    packet.sequence_number = current_fragment++;
-    packet.total_size = fragment_count;
-    Writer *writer = create_writer();
-    if (writer == NULL) {
-      printf(FAILED_TO_CREATE_WRITER_MESSAGE);
-      break;
-    }
-    write_string(writer, file_data.username);
-    write_string(writer, file_data.path_out);
-    write_bytes(writer, buffer, read_from_file);
-    packet.length = writer->length;
-    printf("Sending %lu bytes of file %s to %s at %s: %d/%d\n", read_from_file,
-           file_data.path_in, file_data.username, file_data.path_out,
-           packet.sequence_number + 1, packet.total_size);
-    if (send(file_data.socket, &packet, sizeof(packet), 0) == 0) {
-      printf("Failed to send file %s: socket closed.\n", file_data.path_in);
-      destroy_writer(writer);
-      break;
-    }
-    if (send(file_data.socket, writer->buffer, writer->length, 0) == 0) {
-      printf("Failed to send file %s: socket closed.\n", file_data.path_in);
-      destroy_writer(writer);
-      break;
-    }
-    destroy_writer(writer);
-  }
-  printf("Closing file %s...\n", file_data.path_in);
-  fclose(file);
-  List *list = (List *)hash_get(file_data.hash, file_data.path_in);
-  list_remove(list, file_data.username, strlen(file_data.username) + 1);
-  if (list->count == 0) {
-    hash_remove(file_data.hash, file_data.path_in);
-    list_destroy(list);
-  }
-  free(file_data.path_out);
-  free(file_data.username);
-  free(file_data.path_in);
-  return 0;
-}
-
 void close_socket() { close(server_client.file_descriptor); }
 
 void deallocate() {
@@ -480,4 +379,19 @@ void deallocate() {
   hash_free_content(user_locks);
   hash_destroy(user_locks);
   hash_destroy(files_writing);
+}
+
+char *get_user_file(char username[], char file[]) {
+  file = basename(file);
+  char *user_folder =
+      calloc(sizeof(char), 2 + strlen(username) + 1 + strlen(file) + 1);
+  sprintf(user_folder, "./%s/%s", username, file);
+  return user_folder;
+}
+
+char *get_user_syncdir_file(char file[]) {
+  file = basename(file);
+  char *sync_dir = calloc(sizeof(char), sizeof("./syncdir/") + strlen(file));
+  sprintf(sync_dir, "./syncdir/%s", file);
+  return sync_dir;
 }

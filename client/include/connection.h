@@ -19,8 +19,6 @@ void *control_connection_handler(void *arg);
 void *download_connection_handler(void *arg);
 void *check_connection_handler(void *arg);
 
-void *send_file(void *arg);
-
 void send_upload_message(char path[]);
 void send_download_message(char path[], uint8_t sync);
 void send_delete_message(char path[]);

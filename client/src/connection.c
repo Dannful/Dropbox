@@ -6,7 +6,6 @@
 #include <arpa/inet.h>
 #include <dirent.h>
 #include <libgen.h>
-#include <math.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -28,6 +27,7 @@ Map *file_timestamps = NULL;
 Map *files_writing = NULL;
 
 pthread_mutex_t pooling_lock;
+pthread_mutex_t watcher_lock;
 
 void set_server_data(char host[], uint16_t port) {
   strcpy(hostname, host);
@@ -151,11 +151,17 @@ uint8_t decode_file(Reader *reader, Packet packet) {
   char *out_path = read_string(reader);
   unsigned long username_length = strlen(username);
   pthread_mutex_lock(&pooling_lock);
+  pthread_mutex_lock(&watcher_lock);
   if (!hash_has(path_descriptors, basename(out_path))) {
+    // we're setting this hash before AND after so that even if this thread
+    // calls fopen to create the files and gets interrupted, it is in the
+    // hash
+    hash_set(path_descriptors, basename(out_path), NULL);
     FILE *file = fopen(out_path, "wb");
     hash_set(path_descriptors, basename(out_path), file);
   }
   pthread_mutex_unlock(&pooling_lock);
+  pthread_mutex_unlock(&watcher_lock);
 
   printf("Decoding %hu bytes for file %s: %d/%d\n", packet.length, out_path,
          packet.sequence_number + 1, packet.total_size);
@@ -291,6 +297,8 @@ void send_list_server_message() {
 void send_download_message(char path[], uint8_t sync) {
   int *new_connection = malloc(sizeof(int));
   ConnectionResult result = open_connection(new_connection);
+  if (sync && hash_has(path_descriptors, path))
+    return;
   if (result != SERVER_CONNECTION_SUCCESS) {
     printf("Failed to open connection for download.\n");
     return;
@@ -361,89 +369,6 @@ void close_connection() {
     return;
   }
   close(control_connection);
-}
-
-void *send_file(void *arg) {
-  FileData file_data;
-  memmove(&file_data, arg, sizeof(FileData));
-  free(arg);
-  hash_set(file_data.hash, file_data.path_in, NULL);
-  FILE *file = fopen(file_data.path_in, "rb");
-  fseek(file, 0, SEEK_END);
-  unsigned long file_size = ftell(file);
-  rewind(file);
-  printf("Beginning file read...\n");
-  if (file_size == 0) {
-    Packet packet;
-    packet.total_size = 1;
-    packet.sequence_number = 0;
-    packet.length = 0;
-    packet.type = DATA;
-    Writer *writer = create_writer();
-    write_string(writer, file_data.username);
-    write_string(writer, file_data.path_out);
-    packet.length = writer->length;
-    send(file_data.socket, &packet, sizeof(packet), 0);
-    send(file_data.socket, writer->buffer, writer->length, 0);
-    fclose(file);
-    hash_remove(file_data.hash, file_data.path_in);
-    free(file_data.path_in);
-    free(file_data.path_out);
-    free(file_data.username);
-    destroy_writer(writer);
-    return 0;
-  }
-  uint32_t fragment_count = ceil((double)file_size / PACKET_LENGTH);
-  unsigned long username_length = strlen(file_data.username) + 1;
-  unsigned long path_size = strlen(file_data.path_out) + 1;
-  unsigned long bytes_read = 0;
-  uint32_t current_fragment = 0;
-  int counter = 0;
-  while (bytes_read < file_size) {
-    unsigned int buffer_size = PACKET_LENGTH;
-    uint8_t buffer[buffer_size];
-    Packet packet;
-    unsigned long read_from_file =
-        fread(buffer, sizeof(uint8_t), buffer_size, file);
-    if (read_from_file == 0) {
-      printf("Could not read anything from %s.\n", file_data.path_in);
-      break;
-    }
-    bytes_read += read_from_file;
-    packet.type = DATA;
-    packet.sequence_number = current_fragment++;
-    packet.total_size = fragment_count;
-    Writer *writer = create_writer();
-    if (writer == NULL) {
-      printf(FAILED_TO_CREATE_WRITER_MESSAGE);
-      break;
-    }
-    write_string(writer, file_data.username);
-    write_string(writer, file_data.path_out);
-    write_bytes(writer, buffer, read_from_file);
-    packet.length = writer->length;
-    printf("Sending %lu bytes of file %s to %s at %s: %d/%d\n", read_from_file,
-           file_data.path_in, file_data.username, file_data.path_out,
-           packet.sequence_number + 1, packet.total_size);
-    if (send(file_data.socket, &packet, sizeof(packet), 0) == 0) {
-      printf("Failed to send file %s: socket closed.\n", file_data.path_in);
-      destroy_writer(writer);
-      break;
-    }
-    if (send(file_data.socket, writer->buffer, writer->length, 0) == 0) {
-      printf("Failed to send file %s: socket closed.\n", file_data.path_in);
-      destroy_writer(writer);
-      break;
-    }
-    destroy_writer(writer);
-  }
-  printf("Closing file %s...\n", file_data.path_in);
-  fclose(file);
-  hash_remove(file_data.hash, file_data.path_in);
-  free(file_data.path_out);
-  free(file_data.username);
-  free(file_data.path_in);
-  return 0;
 }
 
 void set_username(char user[USERNAME_LENGTH]) { strcpy(username, user); }

@@ -20,7 +20,7 @@ FsWatch monitor;
 extern Map *path_descriptors;
 extern Map *file_timestamps;
 
-extern pthread_mutex_t pooling_lock;
+extern pthread_mutex_t watcher_lock;
 
 void destroy() {
   inotify_rm_watch(monitor.socket_descriptor, monitor.watch_descriptor);
@@ -48,11 +48,11 @@ void *watcher(void *arg) {
           head += sizeof(struct inotify_event) + event->len;
           continue;
         }
-        if (pthread_mutex_trylock(&pooling_lock) != 0) {
+        if (pthread_mutex_trylock(&watcher_lock) != 0) {
           head += sizeof(struct inotify_event) + event->len;
           continue;
         }
-        pthread_mutex_unlock(&pooling_lock);
+        pthread_mutex_unlock(&watcher_lock);
         if (hash_has(path_descriptors, event->name)) {
           head += sizeof(struct inotify_event) + event->len;
           continue;

@@ -37,4 +37,5 @@ typedef struct {
   int socket;
 } FileData;
 
+void *send_file(void *arg);
 ssize_t safe_recv(int socket, void *buffer, size_t amount, int flags);

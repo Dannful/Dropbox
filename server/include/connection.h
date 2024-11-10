@@ -19,6 +19,8 @@ typedef struct {
 } UserLocks;
 
 ConnectionResult server_listen(uint16_t port);
+char *get_user_file(char username[], char file[]);
+char *get_user_syncdir_file(char file[]);
 void send_message(uint8_t bytes[], unsigned int count);
 void *handle_client_connection(void *arg);
 void *thread_listen(void *arg);
@@ -31,5 +33,4 @@ void send_list_response(char username[], int client_connection);
 void send_upload_message(int client_connection, char username[], char path_in[],
                          char path_out[]);
 void deallocate();
-void *send_file(void *arg);
 #endif
