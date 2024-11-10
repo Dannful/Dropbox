@@ -35,6 +35,7 @@ typedef struct {
   char *username;
   Map *hash;
   int socket;
+  pthread_mutex_t *lock;
 } FileData;
 
 void *send_file(void *arg);

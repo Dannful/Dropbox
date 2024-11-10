@@ -159,8 +159,7 @@ void *handle_client_connection(void *arg) {
         if (!hash_has(user_locks, username)) {
           printf("Creating user lock for %s...\n", username);
           UserLocks *locks = malloc(sizeof(UserLocks));
-          pthread_mutex_init(&locks->send_file_lock, NULL);
-          pthread_mutex_init(&locks->check_lock, NULL);
+          pthread_mutex_init(&locks->file_lock, NULL);
           hash_set(user_locks, username, locks);
         }
         if (stat(username, &st) == -1) {
@@ -257,14 +256,15 @@ void *handle_client_connection(void *arg) {
 void decode_file(Reader *reader, unsigned long username_length, char username[],
                  Packet packet) {
   char *path = read_string(reader);
-  char *user_folder = get_user_file(username, path);
-  while (hash_has(files_writing, user_folder))
-    ;
-  free(user_folder);
-  unsigned long path_size = strlen(path);
   char *out_path = get_user_file(username, path);
-  while (packet.sequence_number == 0 && hash_has(path_descriptors, out_path))
+  UserLocks *locks = (UserLocks *)hash_get(user_locks, username);
+  while (locks == NULL)
     ;
+  if (packet.sequence_number == 0)
+    pthread_mutex_lock(&locks->file_lock);
+  while (hash_has(files_writing, out_path))
+    ;
+  unsigned long path_size = strlen(path);
   printf("Decoding %hu bytes for file %s: %d/%d\n", packet.length, out_path,
          packet.sequence_number + 1, packet.total_size);
   if (packet.length == username_length + 1 + path_size + 1) {
@@ -283,6 +283,7 @@ void decode_file(Reader *reader, unsigned long username_length, char username[],
   if (packet.sequence_number == packet.total_size - 1) {
     fclose(file);
     hash_remove(path_descriptors, out_path);
+    pthread_mutex_unlock(&locks->file_lock);
   }
   free(out_path);
   free(path);
@@ -297,6 +298,8 @@ void send_upload_message(int client_connection, char username[], char path_in[],
   data->path_out = strdup(path_out);
   data->username = strdup(username);
   data->hash = files_writing;
+  data->lock = NULL;
+  // data->lock = &((UserLocks *)hash_get(user_locks, username))->file_lock;
   pthread_create(&upload, NULL, send_file, data);
 }
 

@@ -12,7 +12,11 @@ void *send_file(void *arg) {
   FileData file_data;
   memmove(&file_data, arg, sizeof(FileData));
   free(arg);
+  if (file_data.lock != NULL)
+    pthread_mutex_lock(file_data.lock);
   hash_set(file_data.hash, file_data.path_in, NULL);
+  if (file_data.lock != NULL)
+    pthread_mutex_unlock(file_data.lock);
   FILE *file = fopen(file_data.path_in, "rb");
   fseek(file, 0, SEEK_END);
   unsigned long file_size = ftell(file);

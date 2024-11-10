@@ -14,8 +14,7 @@ typedef enum {
 } ConnectionResult;
 
 typedef struct {
-  pthread_mutex_t send_file_lock;
-  pthread_mutex_t check_lock;
+  pthread_mutex_t file_lock;
 } UserLocks;
 
 ConnectionResult server_listen(uint16_t port);

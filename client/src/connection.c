@@ -138,6 +138,7 @@ void *pooling_manager(void *arg) {
     if (send(control_connection, &check_packet, sizeof(Packet), 0) == 0 ||
         send(control_connection, writer->buffer, writer->length, 0) == 0) {
       destroy_writer(writer);
+      exit(0);
       break;
     }
     destroy_writer(writer);
@@ -273,6 +274,7 @@ void send_upload_message(char path[]) {
   data->path_out = strdup(base_path);
   data->socket = new_connection;
   data->hash = files_writing;
+  data->lock = &pooling_lock;
   pthread_create(&upload, NULL, send_file, data);
 }
 

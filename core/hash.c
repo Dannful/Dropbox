@@ -107,6 +107,7 @@ void hash_remove(Map *map, const char *key) {
   if (strcmp(bucket->key, key) == 0) {
     map->elements[index] = bucket->next;
     free(bucket);
+    map->count--;
     sem_post(&map->semaphore);
     return;
   }
