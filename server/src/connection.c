@@ -27,10 +27,17 @@ typedef struct {
   socklen_t length;
 } client;
 
+typedef struct {
+  char username[256];
+  int connection_1;
+  int connection_2;
+} User;
+
 client server_client;
 Map *path_descriptors;
 Map *files_writing;
 Map *user_locks;
+Map *connected_users;
 
 ConnectionResult server_listen(u_int16_t port) {
   pthread_t listen_thread;
@@ -66,6 +73,7 @@ ConnectionResult server_listen(u_int16_t port) {
   path_descriptors = hash_create();
   user_locks = hash_create();
   files_writing = hash_create();
+  connected_users = hash_create();
 
   pthread_create(&listen_thread, NULL, thread_listen, NULL);
 
@@ -92,6 +100,7 @@ void *thread_listen(void *arg) {
 
 void *handle_client_connection(void *arg) {
   int client_connection = *((int *)arg);
+  char *username = NULL;
 
   int error = 0;
   socklen_t length = sizeof(error);
@@ -110,7 +119,7 @@ void *handle_client_connection(void *arg) {
     if (safe_recv(client_connection, buffer, packet.length, 0) == 0)
       break;
     Reader *reader = create_reader(buffer);
-    char *username = read_string(reader);
+    username = read_string(reader);
     unsigned long username_length = strlen(username);
 
     switch (packet.type) {
@@ -156,6 +165,28 @@ void *handle_client_connection(void *arg) {
       }
       case COMMAND_SYNC_DIR: {
         printf("Received SYN request from user %s.\n", username);
+
+        User *user = (User *)hash_get(connected_users, username);
+
+        if (user == NULL) {
+          user = calloc(1, sizeof(User));
+          strcpy(user->username, username);
+          user->connection_1 = client_connection;
+          user->connection_2 = -1;
+        } else if (user->connection_1 == -1) {
+          user->connection_1 = client_connection;
+        } else if (user->connection_2 == -1) {
+          user->connection_2 = client_connection;
+        } else {
+          printf("User %s already connected to two clients. Closing connection.\n", username);
+          destroy_reader(reader);
+          free(username);  
+          close(client_connection);
+          pthread_exit(0);
+        }
+
+        hash_set(connected_users, username, user);
+
         if (!hash_has(user_locks, username)) {
           printf("Creating user lock for %s...\n", username);
           UserLocks *locks = malloc(sizeof(UserLocks));
@@ -246,10 +277,27 @@ void *handle_client_connection(void *arg) {
       break;
     }
     }
-    free(username);
     destroy_reader(reader);
   }
   printf("Closing connection %d...\n", client_connection);
+
+  User *user = (User *)hash_get(connected_users, username);
+  if (user) {
+    if (user->connection_1 == client_connection) {
+      user->connection_1 = -1;
+    } else if (user->connection_2 == client_connection) {
+      user->connection_2 = -1;
+    }
+
+    if (user->connection_1 == -1 && user->connection_2 == -1) {
+      printf("Removing user %s from connected users.\n", username);
+      hash_remove(connected_users, username);
+      free(user);
+    }
+  }
+
+  free(username);  
+  close(client_connection);
   pthread_exit(0);
 }
 
@@ -386,6 +434,8 @@ void deallocate() {
   hash_free_content(user_locks);
   hash_destroy(user_locks);
   hash_destroy(files_writing);
+  hash_free_content(connected_users);
+  hash_destroy(connected_users);
 }
 
 char *get_user_file(char username[], char file[]) {
