@@ -238,7 +238,6 @@ void *control_connection_handler(void *arg) {
 void *download_connection_handler(void *arg) {
   int connection = *((int *)arg);
   free(arg);
-  printf("bru %d\n", connection);
   while (1) {
     Packet packet;
     if (safe_recv(connection, &packet, sizeof(packet), 0) == 0)

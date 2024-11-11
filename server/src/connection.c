@@ -260,16 +260,20 @@ void decode_file(Reader *reader, unsigned long username_length, char username[],
   UserLocks *locks = (UserLocks *)hash_get(user_locks, username);
   while (locks == NULL)
     ;
-  if (packet.sequence_number == 0)
+  if (packet.sequence_number == 0) {
+    printf("File %s is trying to acquire lock.\n", out_path);
     pthread_mutex_lock(&locks->file_lock);
+  }
   while (hash_has(files_writing, out_path))
-    ;
+    printf("File %s is being sent.\n", out_path);
   unsigned long path_size = strlen(path);
   printf("Decoding %hu bytes for file %s: %d/%d\n", packet.length, out_path,
          packet.sequence_number + 1, packet.total_size);
   if (packet.length == username_length + 1 + path_size + 1) {
     FILE *file = fopen(out_path, "wb");
     fclose(file);
+    if (packet.sequence_number == 0)
+      pthread_mutex_unlock(&locks->file_lock);
     free(path);
     return;
   }
