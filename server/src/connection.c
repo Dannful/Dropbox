@@ -28,7 +28,6 @@ typedef struct {
 } client;
 
 typedef struct {
-  char username[256];
   int connection_1;
   int connection_2;
 } User;
@@ -170,9 +169,10 @@ void *handle_client_connection(void *arg) {
 
         if (user == NULL) {
           user = calloc(1, sizeof(User));
-          strcpy(user->username, username);
           user->connection_1 = client_connection;
           user->connection_2 = -1;
+        } else if (user->connection_1 == client_connection || user->connection_2 == client_connection) {
+          continue;
         } else if (user->connection_1 == -1) {
           user->connection_1 = client_connection;
         } else if (user->connection_2 == -1) {
