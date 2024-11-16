@@ -4,7 +4,6 @@
 #include <stdio.h>
 
 #define PACKET_LENGTH 64
-#define FILE_NAME_LENGTH 256
 #define USERNAME_LENGTH 32
 
 typedef enum { COMMAND = 0, DATA = 1 } MessageType;
@@ -22,12 +21,6 @@ typedef struct {
   uint32_t total_size;
   uint16_t length;
 } Packet;
-
-typedef enum {
-  PACKET_SEND_SOCKET_UNAVAILABLE = -1,
-  PACKET_SEND_OK = 0,
-  PACKET_SEND_SOCKET_CLOSED = 1,
-} PacketSendResult;
 
 typedef struct {
   char *path_in;
