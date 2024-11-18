@@ -1,4 +1,5 @@
 #include "hash.h"
+#include "list.h"
 #include <semaphore.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -29,6 +30,7 @@ typedef struct {
   Map *hash;
   int socket;
   pthread_mutex_t *lock;
+  List *list;
 } FileData;
 
 void *send_file(void *arg);

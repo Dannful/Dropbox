@@ -3,6 +3,7 @@
 #include "../../core/utils.h"
 #include "../../core/writer.h"
 #include "math.h"
+#include "signal.h"
 #include <asm-generic/socket.h>
 #include <dirent.h>
 #include <libgen.h>
@@ -37,6 +38,7 @@ Map *path_descriptors;
 Map *files_writing;
 Map *user_locks;
 Map *connected_users;
+Map *connection_files;
 
 ConnectionResult server_listen(u_int16_t port) {
   pthread_t listen_thread;
@@ -73,6 +75,9 @@ ConnectionResult server_listen(u_int16_t port) {
   user_locks = hash_create();
   files_writing = hash_create();
   connected_users = hash_create();
+  connection_files = hash_create();
+
+  signal(SIGPIPE, SIG_IGN);
 
   pthread_create(&listen_thread, NULL, thread_listen, NULL);
 
@@ -104,6 +109,9 @@ void *handle_client_connection(void *arg) {
   int error = 0;
   socklen_t length = sizeof(error);
   unsigned int read_bytes = 0;
+  char client_connection_key[(int)ceil(log10(client_connection) + 1) + 1];
+  sprintf(client_connection_key, "%d", client_connection);
+  hash_set(connection_files, client_connection_key, create_list());
   while (1) {
     Packet packet;
     struct stat st = {0};
@@ -136,8 +144,15 @@ void *handle_client_connection(void *arg) {
                username, new_file_path);
         char *in_sync_dir = get_user_syncdir_file(arguments);
         if (!hash_has(path_descriptors, new_file_path)) {
-          send_upload_message(client_connection, username, new_file_path,
-                              sync ? in_sync_dir : arguments);
+          List *list = hash_get(connection_files, client_connection_key);
+          if (!list_contains(list, new_file_path, strlen(new_file_path) + 1)) {
+            send_upload_message(client_connection, username, new_file_path,
+                                sync ? in_sync_dir : arguments);
+          } else {
+            close(client_connection);
+          }
+        } else {
+          close(client_connection);
         }
         free(arguments);
         free(new_file_path);
@@ -171,16 +186,19 @@ void *handle_client_connection(void *arg) {
           user = calloc(1, sizeof(User));
           user->connection_1 = client_connection;
           user->connection_2 = -1;
-        } else if (user->connection_1 == client_connection || user->connection_2 == client_connection) {
+        } else if (user->connection_1 == client_connection ||
+                   user->connection_2 == client_connection) {
           continue;
         } else if (user->connection_1 == -1) {
           user->connection_1 = client_connection;
         } else if (user->connection_2 == -1) {
           user->connection_2 = client_connection;
         } else {
-          printf("User %s already connected to two clients. Closing connection.\n", username);
+          printf(
+              "User %s already connected to two clients. Closing connection.\n",
+              username);
           destroy_reader(reader);
-          free(username);  
+          free(username);
           close(client_connection);
           pthread_exit(0);
         }
@@ -214,7 +232,6 @@ void *handle_client_connection(void *arg) {
           printf("Checking file %s with hash %s\n", path, file_hash_string);
           unsigned long path_size = strlen(path);
           char *in_user_dir_path = get_user_file(username, path);
-          List *list = hash_get(files_writing, in_user_dir_path);
           if (hash_has(path_descriptors, in_user_dir_path)) {
             hash_set(files_ok, path, NULL);
             free(path);
@@ -247,8 +264,7 @@ void *handle_client_connection(void *arg) {
           if (hash_has(files_ok, directory_entry->d_name))
             continue;
           char *in_folder = get_user_file(username, directory_entry->d_name);
-          if (hash_has(path_descriptors, in_folder) ||
-              hash_has(files_writing, in_folder))
+          if (hash_has(path_descriptors, in_folder))
             continue;
           write_string(out, directory_entry->d_name);
           printf("Including file %s in CHECK response.\n",
@@ -260,13 +276,19 @@ void *handle_client_connection(void *arg) {
         response.length = out->length;
         response.sequence_number = 0;
         response.total_size = 1;
-        printf("Sending %d bytes of CHECK response to user %s...\n",
-               response.length, username);
-        send(client_connection, &response, sizeof(response), 0);
-        send(client_connection, out->buffer, out->length, 0);
-        destroy_writer(out);
         closedir(dir);
         hash_destroy(files_ok);
+        printf("Sending %d bytes of CHECK response to user %s...\n",
+               response.length, username);
+        if (send(client_connection, &response, sizeof(response), 0) <= 0) {
+          destroy_writer(out);
+          break;
+        }
+        if (send(client_connection, out->buffer, out->length, 0) <= 0) {
+          destroy_writer(out);
+          break;
+        }
+        destroy_writer(out);
         break;
       }
       }
@@ -279,10 +301,11 @@ void *handle_client_connection(void *arg) {
     }
     destroy_reader(reader);
   }
+connection_end:
   printf("Closing connection %d...\n", client_connection);
-
-  User *user = (User *)hash_get(connected_users, username);
-  if (user) {
+  void *user_ptr = hash_get(connected_users, username);
+  if (user_ptr != NULL) {
+    User *user = (User *)user_ptr;
     if (user->connection_1 == client_connection) {
       user->connection_1 = -1;
     } else if (user->connection_2 == client_connection) {
@@ -295,8 +318,10 @@ void *handle_client_connection(void *arg) {
       free(user);
     }
   }
-
-  free(username);  
+  list_destroy(hash_get(connection_files, client_connection_key));
+  hash_remove(connection_files, client_connection_key);
+  if (username != NULL)
+    free(username);
   close(client_connection);
   pthread_exit(0);
 }
@@ -350,8 +375,10 @@ void send_upload_message(int client_connection, char username[], char path_in[],
   data->path_out = strdup(path_out);
   data->username = strdup(username);
   data->hash = files_writing;
-  data->lock = NULL;
-  // data->lock = &((UserLocks *)hash_get(user_locks, username))->file_lock;
+  data->lock = &((UserLocks *)hash_get(user_locks, username))->file_lock;
+  char key[(int)ceil(log10(client_connection) + 1) + 1];
+  sprintf(key, "%d", client_connection);
+  data->list = hash_get(connection_files, key);
   pthread_create(&upload, NULL, send_file, data);
 }
 
@@ -436,6 +463,10 @@ void deallocate() {
   hash_destroy(files_writing);
   hash_free_content(connected_users);
   hash_destroy(connected_users);
+  for (int i = 0; i < connection_files->size; i++)
+    if (connection_files->elements[i] != NULL)
+      list_destroy(connection_files->elements[i]->value);
+  hash_destroy(connection_files);
 }
 
 char *get_user_file(char username[], char file[]) {

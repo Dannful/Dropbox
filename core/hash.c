@@ -20,6 +20,7 @@ Map *hash_create(void) {
     return NULL;
   map->count = 0;
   map->elements = calloc(sizeof(Bucket *), SIZE);
+  map->size = SIZE;
   if (map->elements == NULL)
     return NULL;
   sem_init(&map->semaphore, 0, 1);
@@ -42,6 +43,8 @@ void hash_destroy(Map *map) {
 }
 
 void *hash_get(Map *map, const char *key) {
+  if (key == NULL)
+    return NULL;
   sem_wait(&map->semaphore);
   Bucket *bucket = map->elements[hash(key, SIZE)];
   while (bucket != NULL) {
@@ -102,8 +105,10 @@ void hash_remove(Map *map, const char *key) {
   size_t index = hash(key, SIZE);
   sem_wait(&map->semaphore);
   Bucket *bucket = map->elements[index];
-  if (bucket == NULL)
+  if (bucket == NULL) {
+    sem_post(&map->semaphore);
     return;
+  }
   if (strcmp(bucket->key, key) == 0) {
     map->elements[index] = bucket->next;
     free(bucket);

@@ -18,6 +18,7 @@ typedef struct bucket {
 typedef struct {
   Bucket **elements;
   size_t count;
+  size_t size;
   sem_t semaphore;
 } Map;
 

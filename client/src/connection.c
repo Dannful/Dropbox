@@ -65,6 +65,8 @@ ConnectionResult open_connection(int *fd) {
     return CONNECT_FAILURE;
   }
 
+  printf("Created new connection %d.\n", *fd);
+
   return SERVER_CONNECTION_SUCCESS;
 }
 
@@ -86,7 +88,7 @@ ConnectionResult open_control_connection() {
 
 void *pooling_manager(void *arg) {
   unsigned long username_length = strlen(username);
-  unsigned long amount_to_sleep = 5;
+  unsigned long amount_to_sleep = 1;
   while (1) {
     if (access("./syncdir", F_OK) != 0) {
       sleep(amount_to_sleep);
@@ -296,10 +298,10 @@ void send_list_server_message() {
 }
 
 void send_download_message(char path[], uint8_t sync) {
-  int *new_connection = malloc(sizeof(int));
-  ConnectionResult result = open_connection(new_connection);
   if (sync && hash_has(path_descriptors, path))
     return;
+  int *new_connection = malloc(sizeof(int));
+  ConnectionResult result = open_connection(new_connection);
   if (result != SERVER_CONNECTION_SUCCESS) {
     printf("Failed to open connection for download.\n");
     return;

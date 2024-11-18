@@ -1,3 +1,5 @@
+#ifndef LIST_H
+#define LIST_H
 #include <stdint.h>
 #include <stdio.h>
 
@@ -16,3 +18,4 @@ void list_add(List *list, void *value, size_t count);
 uint8_t list_contains(List *list, void *value, size_t count);
 void list_remove(List *list, void *value, size_t count);
 void list_destroy(List *list);
+#endif

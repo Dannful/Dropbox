@@ -1,6 +1,7 @@
 #include "../../core/utils.h"
 #include "../include/connection.h"
 #include "../include/fs_sync.h"
+#include "signal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,6 +58,7 @@ int main(int argc, char *argv[]) {
     printf("Successfully created sync watcher!\n");
     break;
   }
+  signal(SIGPIPE, SIG_IGN);
   char input[1024] = {0};
   char argument[1024] = {0};
   while (1) {

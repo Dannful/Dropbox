@@ -6,15 +6,25 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
+#include <unistd.h>
 #include <utime.h>
 
 void *send_file(void *arg) {
   FileData file_data;
   memmove(&file_data, arg, sizeof(FileData));
   free(arg);
+  if (access(file_data.path_in, F_OK) != 0) {
+    free(file_data.path_in);
+    free(file_data.path_out);
+    free(file_data.username);
+    close(file_data.socket);
+    return 0;
+  }
   if (file_data.lock != NULL)
     pthread_mutex_lock(file_data.lock);
   hash_set(file_data.hash, file_data.path_in, NULL);
+  if (file_data.list != NULL)
+    list_add(file_data.list, file_data.path_in, strlen(file_data.path_in) + 1);
   if (file_data.lock != NULL)
     pthread_mutex_unlock(file_data.lock);
   FILE *file = fopen(file_data.path_in, "rb");
@@ -39,6 +49,7 @@ void *send_file(void *arg) {
     free(file_data.path_in);
     free(file_data.path_out);
     free(file_data.username);
+    close(file_data.socket);
     destroy_writer(writer);
     return 0;
   }
@@ -89,6 +100,10 @@ void *send_file(void *arg) {
   printf("Closing file %s...\n", file_data.path_in);
   fclose(file);
   hash_remove(file_data.hash, file_data.path_in);
+  if (file_data.list != NULL)
+    list_remove(file_data.list, file_data.path_in,
+                strlen(file_data.path_in) + 1);
+  close(file_data.socket);
   free(file_data.path_out);
   free(file_data.username);
   free(file_data.path_in);
