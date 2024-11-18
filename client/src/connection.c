@@ -276,6 +276,7 @@ void send_upload_message(char path[]) {
   data->socket = new_connection;
   data->hash = files_writing;
   data->lock = &pooling_lock;
+  data->list = NULL;
   pthread_create(&upload, NULL, send_file, data);
 }
 
