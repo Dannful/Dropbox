@@ -88,7 +88,7 @@ ConnectionResult open_control_connection() {
 
 void *pooling_manager(void *arg) {
   unsigned long username_length = strlen(username);
-  unsigned long amount_to_sleep = 1;
+  unsigned long amount_to_sleep = 6;
   while (1) {
     if (access("./syncdir", F_OK) != 0) {
       sleep(amount_to_sleep);
