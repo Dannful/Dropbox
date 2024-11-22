@@ -8,6 +8,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <utime.h>
+#include "hash.h"
 
 void *send_file(void *arg) {
   FileData file_data;

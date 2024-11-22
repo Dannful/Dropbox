@@ -27,10 +27,12 @@ void list_add(List *list, void *value, size_t count) {
 }
 
 void list_remove(List *list, void *value, size_t count) {
-  ListNode *head = list->head;
-  if (head == NULL)
+  if(list == NULL || value == NULL)
     return;
-  if (memcmp(head->value, value, count) == 0) {
+  if (list->head == NULL)
+    return;
+  ListNode *head = list->head;
+  if (head->value != NULL && memcmp(head->value, value, count) == 0) {
     list->head = head->next;
     free(head->value);
     free(head);
@@ -38,7 +40,7 @@ void list_remove(List *list, void *value, size_t count) {
     return;
   }
   while (head->next != NULL) {
-    if (memcmp(head->next->value, value, count) == 0) {
+    if (head->next->value != NULL && memcmp(head->next->value, value, count) == 0) {
       ListNode *aux = head->next;
       head->next = aux->next;
       free(aux->value);

@@ -88,22 +88,23 @@ void *thread_listen(void *arg) {
   printf("Listening for connections...\n");
   while (1) {
     pthread_t thread;
-    int client_socket;
-    if ((client_socket = accept(server_client.file_descriptor,
+    int *client_socket = malloc(sizeof(int));
+    if ((*client_socket = accept(server_client.file_descriptor,
                                 (struct sockaddr *)&server_client.address,
                                 &server_client.length)) < 0) {
       pthread_exit((void *)1);
     }
     printf("Received client connection request: %d. Spawning thread...\n",
-           client_socket);
+           *client_socket);
     pthread_create(&thread, NULL, handle_client_connection,
-                   &(int){client_socket});
+                   client_socket);
   }
   pthread_exit(0);
 }
 
 void *handle_client_connection(void *arg) {
   int client_connection = *((int *)arg);
+  free(arg);
   char *username = NULL;
 
   int error = 0;
@@ -112,6 +113,7 @@ void *handle_client_connection(void *arg) {
   char client_connection_key[(int)ceil(log10(client_connection) + 1) + 1];
   sprintf(client_connection_key, "%d", client_connection);
   hash_set(connection_files, client_connection_key, create_list());
+  hash_set(files_writing, client_connection_key, hash_create());
   while (1) {
     Packet packet;
     struct stat st = {0};
@@ -301,7 +303,6 @@ void *handle_client_connection(void *arg) {
     }
     destroy_reader(reader);
   }
-connection_end:
   printf("Closing connection %d...\n", client_connection);
   void *user_ptr = hash_get(connected_users, username);
   if (user_ptr != NULL) {
@@ -318,8 +319,11 @@ connection_end:
       free(user);
     }
   }
-  list_destroy(hash_get(connection_files, client_connection_key));
+  void *client_connection_files = hash_get(connection_files, client_connection_key);
+  if(client_connection_files != NULL)
+    list_destroy(hash_get(connection_files, client_connection_key));
   hash_remove(connection_files, client_connection_key);
+  
   if (username != NULL)
     free(username);
   close(client_connection);
@@ -374,11 +378,11 @@ void send_upload_message(int client_connection, char username[], char path_in[],
   data->path_in = strdup(path_in);
   data->path_out = strdup(path_out);
   data->username = strdup(username);
-  data->hash = files_writing;
   data->lock = &((UserLocks *)hash_get(user_locks, username))->file_lock;
   char key[(int)ceil(log10(client_connection) + 1) + 1];
   sprintf(key, "%d", client_connection);
   data->list = hash_get(connection_files, key);
+  data->hash = hash_get(files_writing, key);
   pthread_create(&upload, NULL, send_file, data);
 }
 

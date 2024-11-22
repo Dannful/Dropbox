@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define PACKET_LENGTH 64
+#define PACKET_LENGTH 1024
 #define USERNAME_LENGTH 32
 
 typedef enum { COMMAND = 0, DATA = 1 } MessageType;
