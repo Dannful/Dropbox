@@ -1,18 +1,11 @@
 #ifndef CONNECTION_H
 #define CONNECTION_H
 
+#include "../../core/connection.h"
 #include "../../core/packet.h"
 #include "../../core/reader.h"
 #include <stdint.h>
 
-typedef enum {
-  CONNECTION_INVALID_ADDRESS = -3,
-  CONNECTION_SOCKET_FAILRUE = -2,
-  CONNECT_FAILURE = -1,
-  SERVER_CONNECTION_SUCCESS = 0
-} ConnectionResult;
-
-ConnectionResult open_connection(int *fd);
 void set_server_data(char host[], uint16_t port);
 ConnectionResult open_control_connection();
 void *control_connection_handler(void *arg);

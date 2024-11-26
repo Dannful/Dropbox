@@ -33,7 +33,7 @@ int main(int argc, char *argv[]) {
   case CONNECTION_INVALID_ADDRESS:
     printf("The supplied server address is invalid!\n");
     return 1;
-  case CONNECTION_SOCKET_FAILRUE:
+  case CONNECTION_SOCKET_FAILURE:
     printf("Failed to create socket.\n");
     return 1;
   case CONNECT_FAILURE:

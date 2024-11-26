@@ -4,11 +4,25 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define PORT 8080
-
-int main(void) {
+int main(int argc, char *argv[]) {
+  if (argc == 0) {
+    printf("Missing number of server replicas.\n");
+    return 1;
+  }
+  if (argc == 1) {
+    printf("Missing replica identifier.\n");
+    return 1;
+  }
+  set_number_of_replicas(atoi(argv[0]));
+  uint8_t replica_id = atoi(argv[1]);
+  if (replica_id >= get_number_of_replicas()) {
+    printf("Replica identifier must be within [0, %d).\n",
+           get_number_of_replicas());
+    return 1;
+  }
+  set_replica_id(replica_id);
   atexit(deallocate);
-  switch (server_listen(PORT)) {
+  switch (server_listen(BASE_PORT + replica_id)) {
   case SERVER_ACCEPT_FAILURE:
     printf("Server has failed to accept client connection!\n");
     return 1;
@@ -21,9 +35,9 @@ int main(void) {
   case SERVER_SOCKET_BIND_FAILURE:
     printf("Failed to bind server socket! Make sure there is no other process "
            "running on port %d\n",
-           PORT);
+           BASE_PORT + replica_id);
     return 1;
-  case SERVER_CONNECTION_SUCCESS:
+  case SERVER_SUCCESS:
     break;
   }
 

@@ -34,44 +34,9 @@ void set_server_data(char host[], uint16_t port) {
   server_port = port;
 }
 
-ConnectionResult open_connection(int *fd) {
-  *fd = socket(AF_INET, SOCK_STREAM, 0);
-  int status;
-  struct sockaddr_in server_address;
-  pthread_t handler, pooling;
-
-  if (*fd < 0) {
-    return CONNECTION_SOCKET_FAILRUE;
-  }
-
-  struct addrinfo hints = {0}, *res;
-  hints.ai_family = AF_INET;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_protocol = IPPROTO_TCP;
-  if (getaddrinfo(hostname, NULL, &hints, &res) != 0)
-    return CONNECTION_INVALID_ADDRESS;
-
-  server_address.sin_family = AF_INET;
-  server_address.sin_port = htons(server_port);
-
-  if (inet_pton(AF_INET,
-                inet_ntoa(((struct sockaddr_in *)res->ai_addr)->sin_addr),
-                &server_address.sin_addr) <= 0) {
-    return CONNECTION_INVALID_ADDRESS;
-  }
-
-  if ((status = connect(*fd, (struct sockaddr *)&server_address,
-                        sizeof(server_address))) < 0) {
-    return CONNECT_FAILURE;
-  }
-
-  printf("Created new connection %d.\n", *fd);
-
-  return SERVER_CONNECTION_SUCCESS;
-}
-
 ConnectionResult open_control_connection() {
-  ConnectionResult result = open_connection(&control_connection);
+  ConnectionResult result =
+      open_connection(&control_connection, hostname, server_port);
   if (result == SERVER_CONNECTION_SUCCESS) {
     pthread_t handler, pooling;
     path_descriptors = hash_create();
@@ -263,7 +228,8 @@ void send_upload_message(char path[]) {
   if (access(path, F_OK) != 0)
     return;
   int new_connection;
-  ConnectionResult result = open_connection(&new_connection);
+  ConnectionResult result =
+      open_connection(&new_connection, hostname, server_port);
   if (result != SERVER_CONNECTION_SUCCESS) {
     printf("Failed to connect to server.\n");
     return;
@@ -302,7 +268,8 @@ void send_download_message(char path[], uint8_t sync) {
   if (sync && hash_has(path_descriptors, path))
     return;
   int *new_connection = malloc(sizeof(int));
-  ConnectionResult result = open_connection(new_connection);
+  ConnectionResult result =
+      open_connection(new_connection, hostname, server_port);
   if (result != SERVER_CONNECTION_SUCCESS) {
     printf("Failed to open connection for download.\n");
     return;

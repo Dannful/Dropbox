@@ -4,7 +4,6 @@
 #include "../../core/writer.h"
 #include "math.h"
 #include "signal.h"
-#include <asm-generic/socket.h>
 #include <dirent.h>
 #include <libgen.h>
 #include <netdb.h>
@@ -40,7 +39,12 @@ Map *user_locks;
 Map *connected_users;
 Map *connection_files;
 
-ConnectionResult server_listen(u_int16_t port) {
+ServerReplica *server_replicas = NULL;
+
+uint8_t number_of_replicas = 1;
+uint8_t replica_id = 0;
+
+ServerBindResult server_listen(u_int16_t port) {
   pthread_t listen_thread;
 
   server_client.length = sizeof(server_client.address);
@@ -81,7 +85,7 @@ ConnectionResult server_listen(u_int16_t port) {
 
   pthread_create(&listen_thread, NULL, thread_listen, NULL);
 
-  return SERVER_CONNECTION_SUCCESS;
+  return SERVER_SUCCESS;
 }
 
 void *thread_listen(void *arg) {
@@ -90,14 +94,13 @@ void *thread_listen(void *arg) {
     pthread_t thread;
     int *client_socket = malloc(sizeof(int));
     if ((*client_socket = accept(server_client.file_descriptor,
-                                (struct sockaddr *)&server_client.address,
-                                &server_client.length)) < 0) {
+                                 (struct sockaddr *)&server_client.address,
+                                 &server_client.length)) < 0) {
       pthread_exit((void *)1);
     }
     printf("Received client connection request: %d. Spawning thread...\n",
            *client_socket);
-    pthread_create(&thread, NULL, handle_client_connection,
-                   client_socket);
+    pthread_create(&thread, NULL, handle_client_connection, client_socket);
   }
   pthread_exit(0);
 }
@@ -300,6 +303,19 @@ void *handle_client_connection(void *arg) {
       decode_file(reader, username_length, username, packet);
       break;
     }
+    case HEARTBEAT: {
+      Packet heartbeat_response;
+      heartbeat_response.sequence_number = 0;
+      heartbeat_response.total_size = 1;
+      heartbeat_response.type = HEARTBEAT;
+      heartbeat_response.length = 0;
+      send(client_connection, &heartbeat_response, sizeof(Packet), 0);
+      break;
+    }
+    case ELECTION: {
+
+      break;
+    }
     }
     destroy_reader(reader);
   }
@@ -319,11 +335,12 @@ void *handle_client_connection(void *arg) {
       free(user);
     }
   }
-  void *client_connection_files = hash_get(connection_files, client_connection_key);
-  if(client_connection_files != NULL)
+  void *client_connection_files =
+      hash_get(connection_files, client_connection_key);
+  if (client_connection_files != NULL)
     list_destroy(hash_get(connection_files, client_connection_key));
   hash_remove(connection_files, client_connection_key);
-  
+
   if (username != NULL)
     free(username);
   close(client_connection);
@@ -471,6 +488,7 @@ void deallocate() {
     if (connection_files->elements[i] != NULL)
       list_destroy(connection_files->elements[i]->value);
   hash_destroy(connection_files);
+  free(server_replicas);
 }
 
 char *get_user_file(char username[], char file[]) {
@@ -487,3 +505,21 @@ char *get_user_syncdir_file(char file[]) {
   sprintf(sync_dir, "./syncdir/%s", file);
   return sync_dir;
 }
+
+uint8_t get_number_of_replicas() { return number_of_replicas; }
+void set_number_of_replicas(uint8_t replicas) {
+  number_of_replicas = replicas;
+  if (server_replicas == NULL) {
+    server_replicas = malloc(replicas * sizeof(ServerReplica));
+    return;
+  }
+  server_replicas = realloc(server_replicas, replicas * sizeof(ServerReplica));
+}
+
+uint8_t get_replica_id() { return replica_id; }
+void set_replica_id(uint8_t id) { replica_id = id; }
+
+void register_server_replica(ServerReplica replica) {
+  server_replicas[replica.id] = replica;
+}
+ServerReplica *get_server_replica(uint8_t id) { return server_replicas + id; }
