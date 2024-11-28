@@ -6,7 +6,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-void send_election_message(uint8_t elected) {
+uint8_t *in_election = NULL;
+
+void send_election_message(uint8_t is_election_over, uint8_t elected) {
   uint8_t neighbour = (get_replica_id() + 1) % get_number_of_replicas();
   int connection_fd = -1;
   ServerReplica *replica = get_server_replica(neighbour);
@@ -21,11 +23,9 @@ void send_election_message(uint8_t elected) {
   election_packet.sequence_number = 0;
   election_packet.total_size = 1;
 
-  uint8_t this_server_id = get_replica_id();
-
   Writer *writer = create_writer();
+  write_bytes(writer, &is_election_over, sizeof(uint8_t));
   write_bytes(writer, &elected, sizeof(uint8_t));
-  write_bytes(writer, &this_server_id, sizeof(uint8_t));
   election_packet.length = writer->length;
 
   if (send(connection_fd, &election_packet, sizeof(Packet), 0) == 0) {
@@ -82,7 +82,20 @@ HeartbeatResult send_heartbeat_message() {
 
 void receive_election_message(uint8_t is_election_over,
                               uint8_t current_elected) {
-  if (is_election_over) {
+  uint8_t this_replica_id = get_replica_id();
+  if (in_election == NULL)
+    in_election = calloc(sizeof(uint8_t), get_number_of_replicas());
+  if (is_election_over && current_elected == this_replica_id) {
+    free(in_election);
+    in_election = NULL;
     return;
   }
+  uint8_t source =
+      this_replica_id == 0 ? get_number_of_replicas() - 1 : this_replica_id - 1;
+  if (in_election[source])
+    return;
+  in_election[source] = 1;
+  send_election_message(is_election_over, get_replica_id() > current_elected
+                                              ? get_replica_id()
+                                              : current_elected);
 }
