@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 uint8_t *in_election = NULL;
+uint8_t *primary_server = NULL;
 
 void send_election_message(uint8_t is_election_over, uint8_t elected) {
   uint8_t neighbour = (get_replica_id() + 1) % get_number_of_replicas();
@@ -58,26 +59,57 @@ void send_election_message(uint8_t is_election_over, uint8_t elected) {
 }
 
 HeartbeatResult send_heartbeat_message() {
+  if (primary_server == NULL || in_election != NULL)
+    return AWAIT;
   uint8_t neighbour = (get_replica_id() + 1) % get_number_of_replicas();
   int connection_fd = -1;
   ServerReplica *replica = get_server_replica(neighbour);
   ConnectionResult result =
       open_connection(&connection_fd, replica->hostname, replica->port);
   if (result != SERVER_CONNECTION_SUCCESS)
-    return SERVER_DEAD;
+    return AWAIT;
   Packet heartbeat_packet;
   heartbeat_packet.type = HEARTBEAT;
   heartbeat_packet.sequence_number = 0;
   heartbeat_packet.total_size = 1;
-  heartbeat_packet.length = 0;
-  if (send(connection_fd, &heartbeat_packet, sizeof(Packet), 0) <= 0)
-    return SERVER_DEAD;
+  Writer *writer = create_writer();
+  write_bytes(writer, primary_server, sizeof(uint8_t));
+  heartbeat_packet.length = writer->length;
+  if (send(connection_fd, &heartbeat_packet, sizeof(Packet), 0) <= 0) {
+    destroy_writer(writer);
+    return AWAIT;
+  }
+  if (send(connection_fd, writer->buffer, writer->length, 0) <= 0) {
+    destroy_writer(writer);
+    return AWAIT;
+  }
   Packet response_packet;
   if (safe_recv(connection_fd, &response_packet, sizeof(Packet), 0) !=
-      sizeof(Packet))
-    return SERVER_DEAD;
+      sizeof(Packet)) {
+    destroy_writer(writer);
+    return AWAIT;
+  }
+  if (response_packet.length == 0) {
+    close(connection_fd);
+    destroy_writer(writer);
+    return BEGIN_ELECTION;
+  } else {
+    uint8_t neighbour_elected;
+    if (safe_recv(connection_fd, &neighbour_elected, sizeof(neighbour_elected),
+                  0) != sizeof(neighbour_elected)) {
+      close(connection_fd);
+      destroy_writer(writer);
+      return AWAIT;
+    }
+    if (*primary_server != neighbour_elected) {
+      close(connection_fd);
+      destroy_writer(writer);
+      return BEGIN_ELECTION;
+    }
+  }
   close(connection_fd);
-  return SERVER_ALIVE;
+  destroy_writer(writer);
+  return AWAIT;
 }
 
 void receive_election_message(uint8_t is_election_over,
@@ -94,8 +126,17 @@ void receive_election_message(uint8_t is_election_over,
       this_replica_id == 0 ? get_number_of_replicas() - 1 : this_replica_id - 1;
   if (in_election[source])
     return;
+  if (is_election_over)
+    set_primary_server(current_elected);
   in_election[source] = 1;
   send_election_message(is_election_over, get_replica_id() > current_elected
                                               ? get_replica_id()
                                               : current_elected);
+}
+
+uint8_t *get_primary_server() { return primary_server; }
+void set_primary_server(uint8_t replica_id) {
+  if (primary_server == NULL)
+    primary_server = malloc(sizeof(uint8_t));
+  *primary_server = replica_id;
 }

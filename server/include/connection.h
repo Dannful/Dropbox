@@ -55,5 +55,6 @@ void set_replica_id(uint8_t replica_id);
 
 void register_server_replica(ServerReplica replica);
 ServerReplica *get_server_replica(uint8_t id);
+void *thread_ping();
 
 #endif

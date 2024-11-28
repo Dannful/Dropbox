@@ -2,6 +2,7 @@
 #include "../../core/list.h"
 #include "../../core/utils.h"
 #include "../../core/writer.h"
+#include "../include/election.h"
 #include "math.h"
 #include "signal.h"
 #include <dirent.h>
@@ -20,6 +21,7 @@
 #include <utime.h>
 
 #define PENDING_CONNECTIONS_BUFFER 5
+#define PING_THREAD_INTERVAL_SECONDS 6
 
 typedef struct {
   struct sockaddr_in address;
@@ -40,7 +42,7 @@ uint8_t number_of_replicas = 1;
 uint8_t replica_id = 0;
 
 ServerBindResult server_listen(u_int16_t port) {
-  pthread_t listen_thread;
+  pthread_t listen_thread, ping_thread;
 
   server_client.length = sizeof(server_client.address);
   server_client.file_descriptor = socket(AF_INET, SOCK_STREAM, 0);
@@ -79,6 +81,7 @@ ServerBindResult server_listen(u_int16_t port) {
   signal(SIGPIPE, SIG_IGN);
 
   pthread_create(&listen_thread, NULL, thread_listen, NULL);
+  pthread_create(&ping_thread, NULL, thread_ping, NULL);
 
   return SERVER_SUCCESS;
 }
@@ -98,6 +101,14 @@ void *thread_listen(void *arg) {
     pthread_create(&thread, NULL, handle_client_connection, client_socket);
   }
   pthread_exit(0);
+}
+
+void *thread_ping() {
+  send_election_message(0, replica_id);
+  while (1) {
+    send_heartbeat_message();
+    sleep(PING_THREAD_INTERVAL_SECONDS);
+  }
 }
 
 void *handle_client_connection(void *arg) {
@@ -193,7 +204,8 @@ void *handle_client_connection(void *arg) {
         }
 
         pthread_mutex_lock(&locks->sync_dir_lock);
-        UserConnections *user = (UserConnections *)hash_get(connected_users, username);
+        UserConnections *user =
+            (UserConnections *)hash_get(connected_users, username);
 
         if (user == NULL) {
           user = calloc(1, sizeof(UserConnections));
@@ -219,7 +231,7 @@ void *handle_client_connection(void *arg) {
 
         hash_set(connected_users, username, user);
         pthread_mutex_unlock(&locks->sync_dir_lock);
-        
+
         break;
       }
       case COMMAND_CHECK: {
@@ -305,12 +317,8 @@ void *handle_client_connection(void *arg) {
       break;
     }
     case HEARTBEAT: {
-      Packet heartbeat_response;
-      heartbeat_response.sequence_number = 0;
-      heartbeat_response.total_size = 1;
-      heartbeat_response.type = HEARTBEAT;
-      heartbeat_response.length = 0;
-      send(client_connection, &heartbeat_response, sizeof(Packet), 0);
+      if (send_heartbeat_message() == BEGIN_ELECTION)
+        send_election_message(0, get_replica_id());
       break;
     }
     case ELECTION: {
@@ -478,6 +486,7 @@ void send_list_response(char username[], int client_connection) {
 void close_socket() { close(server_client.file_descriptor); }
 
 void deallocate() {
+  extern uint8_t *primary_server, *in_election;
   close(server_client.file_descriptor);
   hash_destroy(path_descriptors);
   hash_free_content(user_locks);
@@ -490,6 +499,9 @@ void deallocate() {
       list_destroy(connection_files->elements[i]->value);
   hash_destroy(connection_files);
   free(server_replicas);
+  free(primary_server);
+  if (in_election != NULL)
+    free(in_election);
 }
 
 char *get_user_file(char username[], char file[]) {
