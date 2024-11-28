@@ -5,16 +5,16 @@
 #include <string.h>
 
 int main(int argc, char *argv[]) {
-  if (argc == 0) {
+  if (argc == 1) {
     printf("Missing number of server replicas.\n");
     return 1;
   }
-  if (argc == 1) {
+  if (argc == 2) {
     printf("Missing replica identifier.\n");
     return 1;
   }
-  set_number_of_replicas(atoi(argv[0]));
-  uint8_t replica_id = atoi(argv[1]);
+  set_number_of_replicas(atoi(argv[1]));
+  uint8_t replica_id = atoi(argv[2]);
   if (replica_id >= get_number_of_replicas()) {
     printf("Replica identifier must be within [0, %d).\n",
            get_number_of_replicas());

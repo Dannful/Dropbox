@@ -27,11 +27,6 @@ typedef struct {
   socklen_t length;
 } client;
 
-typedef struct {
-  int connection_1;
-  int connection_2;
-} User;
-
 client server_client;
 Map *path_descriptors;
 Map *files_writing;
@@ -185,10 +180,23 @@ void *handle_client_connection(void *arg) {
       case COMMAND_SYNC_DIR: {
         printf("Received SYN request from user %s.\n", username);
 
-        User *user = (User *)hash_get(connected_users, username);
+        UserLocks *locks = (UserLocks *)hash_get(user_locks, username);
+        if (locks == NULL) {
+          printf("Creating user lock for %s...\n", username);
+          locks = malloc(sizeof(UserLocks));
+          pthread_mutex_init(&locks->file_lock, NULL);
+          pthread_mutex_init(&locks->sync_dir_lock, NULL);
+          hash_set(user_locks, username, locks);
+        }
+        if (stat(username, &st) == -1) {
+          mkdir(username, 0700);
+        }
+
+        pthread_mutex_lock(&locks->sync_dir_lock);
+        UserConnections *user = (UserConnections *)hash_get(connected_users, username);
 
         if (user == NULL) {
-          user = calloc(1, sizeof(User));
+          user = calloc(1, sizeof(UserConnections));
           user->connection_1 = client_connection;
           user->connection_2 = -1;
         } else if (user->connection_1 == client_connection ||
@@ -205,20 +213,13 @@ void *handle_client_connection(void *arg) {
           destroy_reader(reader);
           free(username);
           close(client_connection);
+          pthread_mutex_unlock(&locks->sync_dir_lock);
           pthread_exit(0);
         }
 
         hash_set(connected_users, username, user);
-
-        if (!hash_has(user_locks, username)) {
-          printf("Creating user lock for %s...\n", username);
-          UserLocks *locks = malloc(sizeof(UserLocks));
-          pthread_mutex_init(&locks->file_lock, NULL);
-          hash_set(user_locks, username, locks);
-        }
-        if (stat(username, &st) == -1) {
-          mkdir(username, 0700);
-        }
+        pthread_mutex_unlock(&locks->sync_dir_lock);
+        
         break;
       }
       case COMMAND_CHECK: {
@@ -322,7 +323,7 @@ void *handle_client_connection(void *arg) {
   printf("Closing connection %d...\n", client_connection);
   void *user_ptr = hash_get(connected_users, username);
   if (user_ptr != NULL) {
-    User *user = (User *)user_ptr;
+    UserConnections *user = (UserConnections *)user_ptr;
     if (user->connection_1 == client_connection) {
       user->connection_1 = -1;
     } else if (user->connection_2 == client_connection) {

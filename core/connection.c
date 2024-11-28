@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 
-ConnectionResult open_connection(int *fd, char *host, uint8_t port) {
+ConnectionResult open_connection(int *fd, char *host, uint16_t port) {
   *fd = socket(AF_INET, SOCK_STREAM, 0);
   int status;
   struct sockaddr_in server_address;

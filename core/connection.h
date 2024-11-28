@@ -10,6 +10,6 @@ typedef enum {
   SERVER_CONNECTION_SUCCESS = 0
 } ConnectionResult;
 
-ConnectionResult open_connection(int *fd, char *host, uint8_t port);
+ConnectionResult open_connection(int *fd, char *host, uint16_t port);
 
 #endif

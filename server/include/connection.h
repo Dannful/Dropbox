@@ -9,7 +9,13 @@
 
 typedef struct {
   pthread_mutex_t file_lock;
+  pthread_mutex_t sync_dir_lock;
 } UserLocks;
+
+typedef struct {
+  int connection_1;
+  int connection_2;
+} UserConnections;
 
 typedef enum {
   SERVER_ACCEPT_FAILURE = -4,
