@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../include/election.h"
 
 int main(int argc, char *argv[]) {
   if (argc == 1) {
@@ -13,6 +14,10 @@ int main(int argc, char *argv[]) {
     printf("Missing replica identifier.\n");
     return 1;
   }
+  if(argc == 3) {
+    printf("Missing primary server identifier.\n");
+    return 1;
+  }
   set_number_of_replicas(atoi(argv[1]));
   uint8_t replica_id = atoi(argv[2]);
   if (replica_id >= get_number_of_replicas()) {
@@ -21,6 +26,7 @@ int main(int argc, char *argv[]) {
     return 1;
   }
   set_replica_id(replica_id);
+  set_primary_server(atoi(argv[3]));
   atexit(deallocate);
   switch (server_listen(BASE_PORT + replica_id)) {
   case SERVER_ACCEPT_FAILURE:

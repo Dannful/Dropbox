@@ -1,4 +1,5 @@
 #include "../include/connection.h"
+#include "../../core/connection.h"
 #include "../../core/list.h"
 #include "../../core/utils.h"
 #include "../../core/writer.h"
@@ -35,6 +36,7 @@ Map *files_writing;
 Map *user_locks;
 Map *connected_users;
 Map *connection_files;
+Map *pending_servers;
 
 ServerReplica *server_replicas = NULL;
 
@@ -77,6 +79,7 @@ ServerBindResult server_listen(u_int16_t port) {
   files_writing = hash_create();
   connected_users = hash_create();
   connection_files = hash_create();
+  pending_servers = hash_create();
 
   signal(SIGPIPE, SIG_IGN);
 
@@ -322,7 +325,11 @@ void *handle_client_connection(void *arg) {
       break;
     }
     case ELECTION: {
-
+      uint8_t is_election_over, elected, dead[get_number_of_replicas()];
+      read_u8(reader, &is_election_over, sizeof(uint8_t));
+      read_u8(reader, &elected, sizeof(uint8_t));
+      read_u8(reader, dead, sizeof(uint8_t) * get_number_of_replicas());
+      receive_election_message(is_election_over, elected, dead);
       break;
     }
     }
@@ -354,6 +361,27 @@ void *handle_client_connection(void *arg) {
     free(username);
   close(client_connection);
   pthread_exit(0);
+}
+
+void send_file_to_servers(char path[], char username[]) {
+  for(int replica_id = 0; replica_id < get_number_of_replicas(); replica_id++) {
+    ServerReplica *replica = get_server_replica(replica_id);
+    if(replica == NULL)
+      continue;
+    int fd = -1;
+    if(open_connection(&fd, replica->hostname, replica->port) != SERVER_CONNECTION_SUCCESS)
+      continue;
+    FileData *data = malloc(sizeof(FileData));
+    data->path_in = strdup(path);
+    data->path_out = get_user_file(username, path);
+    data->hash = NULL;
+    data->list = NULL;
+    data->socket = fd;
+
+    pthread_t file_send_thread;
+
+    pthread_create(&file_send_thread, NULL, send_file, data);
+  }
 }
 
 void decode_file(Reader *reader, unsigned long username_length, char username[],
@@ -486,7 +514,7 @@ void send_list_response(char username[], int client_connection) {
 void close_socket() { close(server_client.file_descriptor); }
 
 void deallocate() {
-  extern uint8_t *primary_server, *in_election;
+  extern uint8_t *primary_server, *in_election, *dead;
   close(server_client.file_descriptor);
   hash_destroy(path_descriptors);
   hash_free_content(user_locks);
@@ -498,8 +526,10 @@ void deallocate() {
     if (connection_files->elements[i] != NULL)
       list_destroy(connection_files->elements[i]->value);
   hash_destroy(connection_files);
+  hash_destroy(pending_servers);
   free(server_replicas);
   free(primary_server);
+  free(dead);
   if (in_election != NULL)
     free(in_election);
 }
@@ -521,12 +551,15 @@ char *get_user_syncdir_file(char file[]) {
 
 uint8_t get_number_of_replicas() { return number_of_replicas; }
 void set_number_of_replicas(uint8_t replicas) {
+  extern uint8_t *dead;
   number_of_replicas = replicas;
   if (server_replicas == NULL) {
     server_replicas = malloc(replicas * sizeof(ServerReplica));
+    dead = calloc(replicas, sizeof(uint8_t));
     return;
   }
   server_replicas = realloc(server_replicas, replicas * sizeof(ServerReplica));
+  dead = realloc(dead, replicas * sizeof(uint8_t));
 }
 
 uint8_t get_replica_id() { return replica_id; }

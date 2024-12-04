@@ -23,7 +23,8 @@ void *send_file(void *arg) {
   }
   if (file_data.lock != NULL)
     pthread_mutex_lock(file_data.lock);
-  hash_set(file_data.hash, file_data.path_in, NULL);
+  if(file_data.hash != NULL)
+    hash_set(file_data.hash, file_data.path_in, NULL);
   if (file_data.list != NULL)
     list_add(file_data.list, file_data.path_in, strlen(file_data.path_in) + 1);
   if (file_data.lock != NULL)
@@ -46,7 +47,8 @@ void *send_file(void *arg) {
     send(file_data.socket, &packet, sizeof(packet), 0);
     send(file_data.socket, writer->buffer, writer->length, 0);
     fclose(file);
-    hash_remove(file_data.hash, file_data.path_in);
+    if(file_data.hash != NULL)
+      hash_remove(file_data.hash, file_data.path_in);
     free(file_data.path_in);
     free(file_data.path_out);
     free(file_data.username);
@@ -100,7 +102,8 @@ void *send_file(void *arg) {
   }
   printf("Closing file %s...\n", file_data.path_in);
   fclose(file);
-  hash_remove(file_data.hash, file_data.path_in);
+  if(file_data.hash != NULL)
+    hash_remove(file_data.hash, file_data.path_in);
   if (file_data.list != NULL)
     list_remove(file_data.list, file_data.path_in,
                 strlen(file_data.path_in) + 1);
