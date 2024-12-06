@@ -13,7 +13,7 @@
         stdenv = pkgs.gcc14Stdenv;
       in {
         devShells.default = pkgs.mkShell.override { inherit stdenv; } {
-          buildInputs = with pkgs; [ openssl ];
+          buildInputs = with pkgs; [ openssl valgrind ];
           packages = with pkgs; [ llvmPackages_17.clang-tools ];
           env = {
             CLANGD_FLAGS = "--query-driver=${pkgs.lib.getExe stdenv.cc}";

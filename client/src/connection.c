@@ -83,13 +83,14 @@ void *pooling_manager(void *arg) {
       }
       struct stat attributes;
       unsigned long file_name_length = strlen(directory_entry->d_name);
-      char full_path[sizeof("./syncdir/") - 1 + file_name_length];
-      sprintf(full_path, "./syncdir/%s", directory_entry->d_name);
+      size_t length = sizeof("./syncdir/") + file_name_length;
+      char full_path[length];
+      snprintf(full_path, length, "./syncdir/%s", directory_entry->d_name);
       if (hash_has(files_writing, full_path)) {
         pthread_mutex_unlock(&pooling_lock);
         continue;
       }
-      uint8_t file_hash[HASH_ALGORITHM_BYTE_LENGTH];
+      uint8_t file_hash[HASH_ALGORITHM_BYTE_LENGTH] = {0};
       hash_file(file_hash, full_path);
       char file_hash_string[HASH_ALGORITHM_BYTE_LENGTH * 2 + 1] = {0};
       bytes_to_string(file_hash_string, file_hash, HASH_ALGORITHM_BYTE_LENGTH);

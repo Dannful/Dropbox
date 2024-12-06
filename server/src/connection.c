@@ -5,11 +5,9 @@
 #include "../../core/writer.h"
 #include "../include/election.h"
 #include "math.h"
-#include "signal.h"
 #include <dirent.h>
 #include <libgen.h>
 #include <netdb.h>
-#include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,97 +19,219 @@
 #include <unistd.h>
 #include <utime.h>
 
+#define CONTROL_PORT 8000
+
 #define PENDING_CONNECTIONS_BUFFER 5
 #define PING_THREAD_INTERVAL_SECONDS 6
 
 typedef struct {
   struct sockaddr_in address;
   int file_descriptor;
+  struct sockaddr_in cluster_address;
+  int cluster_fd;
   socklen_t length;
+  socklen_t cluster_length;
 } client;
 
 client server_client;
-Map *path_descriptors;
-Map *files_writing;
-Map *user_locks;
-Map *connected_users;
-Map *connection_files;
-Map *pending_servers;
+Map *path_descriptors = NULL;
+Map *files_writing = NULL;
+Map *user_locks = NULL;
+Map *connected_users = NULL;
+Map *connection_files = NULL;
+Map *pending_servers = NULL;
 
 ServerReplica *server_replicas = NULL;
 
 uint8_t number_of_replicas = 1;
 uint8_t replica_id = 0;
 
-ServerBindResult server_listen(u_int16_t port) {
-  pthread_t listen_thread, ping_thread;
+uint16_t control_port, cluster_port;
 
-  server_client.length = sizeof(server_client.address);
-  server_client.file_descriptor = socket(AF_INET, SOCK_STREAM, 0);
+ServerBindResult server_listen(int *fd, struct sockaddr_in *address, u_int16_t port) {
+  *fd = socket(AF_INET, SOCK_STREAM, 0);
   int optval = 1;
-  setsockopt(server_client.file_descriptor, SOL_SOCKET, SO_REUSEADDR, &optval,
+  setsockopt(*fd, SOL_SOCKET, SO_REUSEADDR, &optval,
              sizeof(optval));
 
-  if (server_client.file_descriptor == -1) {
+  if (*fd == -1) {
     return SERVER_SOCKET_CREATION_FAILURE;
   }
-  bzero(&server_client.address, sizeof(server_client.address));
+  bzero(address, sizeof(*address));
 
-  server_client.address.sin_family = AF_INET;
-  server_client.address.sin_addr.s_addr = INADDR_ANY;
-  server_client.address.sin_port = htons(port);
+  address->sin_family = AF_INET;
+  address->sin_addr.s_addr = INADDR_ANY;
+  address->sin_port = htons(port);
 
-  if ((bind(server_client.file_descriptor,
-            (struct sockaddr *)&server_client.address,
-            sizeof(server_client.address))) < 0) {
+  if ((bind(*fd,
+            (struct sockaddr *)address,
+            sizeof(*address))) < 0) {
     return SERVER_SOCKET_BIND_FAILURE;
   }
 
-  if ((listen(server_client.file_descriptor, PENDING_CONNECTIONS_BUFFER)) < 0) {
+  if ((listen(*fd, PENDING_CONNECTIONS_BUFFER)) < 0) {
     return SERVER_SOCKET_LISTEN_FAILURE;
   }
 
   printf("Server bound with socket %d. Spawning LISTEN thread...\n",
-         server_client.file_descriptor);
-
-  path_descriptors = hash_create();
-  user_locks = hash_create();
-  files_writing = hash_create();
-  connected_users = hash_create();
-  connection_files = hash_create();
-  pending_servers = hash_create();
-
-  signal(SIGPIPE, SIG_IGN);
-
-  pthread_create(&listen_thread, NULL, thread_listen, NULL);
-  pthread_create(&ping_thread, NULL, thread_ping, NULL);
+    *fd);
 
   return SERVER_SUCCESS;
 }
 
-void *thread_listen(void *arg) {
-  printf("Listening for connections...\n");
+ServerBindResult create_control_socket(uint16_t port) {
+  ServerBindResult result = server_listen(&server_client.file_descriptor, &server_client.address, port);
+  if(result == SERVER_SUCCESS) {
+    pthread_t listen_thread;
+    pending_servers = hash_create();
+    user_locks = hash_create();
+    files_writing = hash_create();
+    connected_users = hash_create();
+    connection_files = hash_create();
+    pthread_create(&listen_thread, NULL, thread_control_listen, NULL);
+  }
+  return result;
+}
+
+ServerBindResult create_cluster_socket(uint16_t port) {
+  ServerBindResult result = server_listen(&server_client.cluster_fd, &server_client.cluster_address, port);
+  if(result == SERVER_SUCCESS) {
+    pthread_t ping_thread, cluster_thread;
+    pthread_create(&ping_thread, NULL, thread_ping, NULL);
+    pthread_create(&cluster_thread, NULL, thread_cluster_listen, NULL);
+  }
+  return result;
+}
+
+void *thread_control_listen(void *arg) {
   while (1) {
-    pthread_t thread;
+    uint8_t *primary_server = get_primary_server();
+    if(primary_server == NULL || *primary_server != get_replica_id()) {
+      sleep(PING_THREAD_INTERVAL_SECONDS);
+      continue;
+    }
+    printf("CONTROL: Listening for connections...\n");
+    pthread_t main, backup;
     int *client_socket = malloc(sizeof(int));
     if ((*client_socket = accept(server_client.file_descriptor,
                                  (struct sockaddr *)&server_client.address,
                                  &server_client.length)) < 0) {
       pthread_exit((void *)1);
     }
-    printf("Received client connection request: %d. Spawning thread...\n",
+    printf("CONTROL: Received client connection request: %d. Spawning thread...\n",
            *client_socket);
-    pthread_create(&thread, NULL, handle_client_connection, client_socket);
+    pthread_create(&main, NULL, handle_client_connection, client_socket);
+  }
+  pthread_exit(0);
+}
+
+void *thread_cluster_listen(void *arg) {
+  while (1) {
+    printf("CLUSTER: Listening for connections...\n");
+    pthread_t main;
+    int *client_socket = malloc(sizeof(int));
+    if ((*client_socket = accept(server_client.cluster_fd,
+                                 (struct sockaddr *)&server_client.cluster_address,
+                                 &server_client.length)) < 0) {
+      pthread_exit((void *)1);
+    }
+    printf("CLUSTER: Received client connection request: %d. Spawning thread...\n",
+           *client_socket);
+    pthread_create(&main, NULL, handle_cluster_connection, client_socket);
   }
   pthread_exit(0);
 }
 
 void *thread_ping() {
-  send_election_message(0, replica_id);
   while (1) {
-    send_heartbeat_message();
+    if(get_primary_server() == NULL || *get_primary_server() == get_replica_id()) {
+      sleep(PING_THREAD_INTERVAL_SECONDS);
+      continue;
+    }
+    if(send_heartbeat_message() == BEGIN_ELECTION)
+      send_election_message(0, get_replica_id());
     sleep(PING_THREAD_INTERVAL_SECONDS);
   }
+}
+
+void *handle_cluster_connection(void *arg) {
+  int client_connection = *((int *)arg);
+  free(arg);
+
+  while(1) {
+    Packet packet;
+    printf("CLUSTER: Waiting to read bytes from socket %d...\n", client_connection);
+    if (safe_recv(client_connection, &packet, sizeof(packet), 0) != sizeof(packet))
+      break;
+    uint8_t buffer[packet.length];
+    if (safe_recv(client_connection, buffer, packet.length, 0) != packet.length)
+      break;
+    printf("CLUSTER: Received message of type %d from connection %d and %d bytes.\n",
+           packet.type, client_connection, packet.length);
+    Reader *reader = create_reader(buffer);
+    if(packet.type == COMMAND) {
+      CommandType command = read_ulong(reader);
+
+      if(command == COMMAND_SYNC_DIR) {
+        struct stat st = {0};
+        char *username = read_string(reader);
+
+        if (stat(username, &st) == -1)
+          mkdir(username, 0700);
+        free(username);
+      } else if(command == COMMAND_DELETE) {
+        char *path = read_string(reader);
+        remove(path);
+      }
+    } else if(packet.type == ELECTION) {
+      uint8_t is_election_over, elected, dead[get_number_of_replicas()];
+      read_u8(reader, &is_election_over, sizeof(uint8_t));
+      read_u8(reader, &elected, sizeof(uint8_t));
+      read_u8(reader, dead, sizeof(uint8_t) * get_number_of_replicas());
+      printf("Received ELECTION message. Election over: %d. Elected: %d.\n", is_election_over, elected);
+      receive_election_message(is_election_over, elected, dead);
+    } else if(packet.type == HEARTBEAT) {
+      uint8_t response_needed, sender_id;
+      read_u8(reader, &response_needed, sizeof(response_needed));
+      read_u8(reader, &sender_id, sizeof(sender_id));
+      printf("Received HEARTBEAT from server %d.\n", sender_id);
+      revive_server(sender_id);
+      if(!response_needed) {
+        destroy_reader(reader);
+        return 0;
+      }
+      Packet response;
+      response.type = HEARTBEAT;
+      response.sequence_number = 0;
+      response.total_size = 1;
+      Writer *writer = create_writer();
+      uint8_t id = get_replica_id();
+      response_needed = 0;
+      write_bytes(writer, &response_needed, sizeof(response_needed));
+      write_bytes(writer, &id, sizeof(id));
+      response.length = writer->length;
+      send(client_connection, &response, sizeof(Packet), 0);
+      send(client_connection, writer->buffer, writer->length, 0);
+    } else if(packet.type == DATA) {
+      char *username = read_string(reader);
+      unsigned long username_length = strlen(username);
+      decode_file(reader, username_length, username, packet, client_connection);
+      free(username);
+    } else if(packet.type == DATA_OK) {
+      char *path = read_string(reader);
+      int *current_count = (int*) hash_get(pending_servers, path);
+      printf("Received DATA OK packet for %s. Current count is %d.\n", path, *current_count);
+      (*current_count)++;
+      if(*current_count == get_number_of_replicas())
+        hash_remove(pending_servers, path);
+      free(path);
+      break;
+    }
+    destroy_reader(reader);
+  }
+  printf("CLUSTER: Closing connection %d...\n", client_connection);
+  close(client_connection);
+  return 0;
 }
 
 void *handle_client_connection(void *arg) {
@@ -126,7 +246,13 @@ void *handle_client_connection(void *arg) {
   sprintf(client_connection_key, "%d", client_connection);
   hash_set(connection_files, client_connection_key, create_list());
   hash_set(files_writing, client_connection_key, hash_create());
+
   while (1) {
+    if(get_primary_server() == NULL || *get_primary_server() != get_replica_id()) {
+      printf("Dammit, I'm not the chosen one! Taking a nap...\n");
+      sleep(6);
+      continue;
+    }
     Packet packet;
     struct stat st = {0};
 
@@ -157,16 +283,16 @@ void *handle_client_connection(void *arg) {
         printf("Received download request from user %s and file %s.\n",
                username, new_file_path);
         char *in_sync_dir = get_user_syncdir_file(arguments);
-        if (!hash_has(path_descriptors, new_file_path)) {
+        if (!hash_has(path_descriptors, new_file_path) && !hash_has(pending_servers, new_file_path)) {
           List *list = hash_get(connection_files, client_connection_key);
           if (!list_contains(list, new_file_path, strlen(new_file_path) + 1)) {
             send_upload_message(client_connection, username, new_file_path,
                                 sync ? in_sync_dir : arguments);
           } else {
-            close(client_connection);
+            goto end;
           }
         } else {
-          close(client_connection);
+          goto end;
         }
         free(arguments);
         free(new_file_path);
@@ -181,6 +307,28 @@ void *handle_client_connection(void *arg) {
                arguments);
         if (remove(new_file_path) != 0)
           break;
+
+        for(int i = 0; i < get_number_of_replicas(); i++) {
+          if(i != *get_primary_server()) {
+            int fd;
+            ServerReplica *replica = get_server_replica(i);
+            if(replica == NULL)
+              continue;
+            if(open_connection(&fd, replica->hostname, replica->port) != SERVER_CONNECTION_SUCCESS)
+              continue;
+            Packet sync;
+            sync.type = COMMAND;
+            sync.sequence_number = 0;
+            sync.total_size = 1;
+            Writer *writer = create_writer();
+            write_ulong(writer, COMMAND_DELETE);
+            write_string(writer, new_file_path);
+            sync.length = writer->length;
+            send(fd, &sync, sizeof(sync), 0);
+            send(fd, writer->buffer, writer->length, 0);
+          }
+        }
+
         send_delete_message(client_connection, arguments);
         free(arguments);
         free(new_file_path);
@@ -202,6 +350,27 @@ void *handle_client_connection(void *arg) {
           pthread_mutex_init(&locks->sync_dir_lock, NULL);
           hash_set(user_locks, username, locks);
         }
+        for(int i = 0; i < get_number_of_replicas(); i++) {
+          if(i != *get_primary_server()) {
+            int fd;
+            ServerReplica *replica = get_server_replica(i);
+            if(replica == NULL)
+              continue;
+            if(open_connection(&fd, replica->hostname, replica->port) != SERVER_CONNECTION_SUCCESS)
+              continue;
+            Packet sync;
+            sync.type = COMMAND;
+            sync.sequence_number = 0;
+            sync.total_size = 1;
+            Writer *writer = create_writer();
+            write_ulong(writer, COMMAND_SYNC_DIR);
+            write_string(writer, username);
+            sync.length = writer->length;
+            send(fd, &sync, sizeof(sync), 0);
+            send(fd, writer->buffer, writer->length, 0);
+            destroy_writer(writer);
+          }
+        }
         if (stat(username, &st) == -1) {
           mkdir(username, 0700);
         }
@@ -209,7 +378,6 @@ void *handle_client_connection(void *arg) {
         pthread_mutex_lock(&locks->sync_dir_lock);
         UserConnections *user =
             (UserConnections *)hash_get(connected_users, username);
-
         if (user == NULL) {
           user = calloc(1, sizeof(UserConnections));
           user->connection_1 = client_connection;
@@ -316,25 +484,22 @@ void *handle_client_connection(void *arg) {
       break;
     }
     case DATA: {
-      decode_file(reader, username_length, username, packet);
+      decode_file(reader, username_length, username, packet, -1);
       break;
     }
     case HEARTBEAT: {
-      if (send_heartbeat_message() == BEGIN_ELECTION)
-        send_election_message(0, get_replica_id());
       break;
     }
     case ELECTION: {
-      uint8_t is_election_over, elected, dead[get_number_of_replicas()];
-      read_u8(reader, &is_election_over, sizeof(uint8_t));
-      read_u8(reader, &elected, sizeof(uint8_t));
-      read_u8(reader, dead, sizeof(uint8_t) * get_number_of_replicas());
-      receive_election_message(is_election_over, elected, dead);
+      break;
+    }
+    case DATA_OK: {
       break;
     }
     }
     destroy_reader(reader);
   }
+  end:
   printf("Closing connection %d...\n", client_connection);
   void *user_ptr = hash_get(connected_users, username);
   if (user_ptr != NULL) {
@@ -363,8 +528,10 @@ void *handle_client_connection(void *arg) {
   pthread_exit(0);
 }
 
-void send_file_to_servers(char path[], char username[]) {
+void send_file_to_servers(char *path, char *username) {
   for(int replica_id = 0; replica_id < get_number_of_replicas(); replica_id++) {
+    if(replica_id == *get_primary_server())
+      continue;
     ServerReplica *replica = get_server_replica(replica_id);
     if(replica == NULL)
       continue;
@@ -372,30 +539,33 @@ void send_file_to_servers(char path[], char username[]) {
     if(open_connection(&fd, replica->hostname, replica->port) != SERVER_CONNECTION_SUCCESS)
       continue;
     FileData *data = malloc(sizeof(FileData));
-    data->path_in = strdup(path);
-    data->path_out = get_user_file(username, path);
+    data->path_in = strdup(get_user_file(username, path));
+    data->path_out = strdup(path);
     data->hash = NULL;
     data->list = NULL;
+    data->lock = NULL;
+    data->username = strdup(username);
     data->socket = fd;
 
-    pthread_t file_send_thread;
+    pthread_t file_send_thread, handle_connection;
 
     pthread_create(&file_send_thread, NULL, send_file, data);
   }
 }
 
 void decode_file(Reader *reader, unsigned long username_length, char username[],
-                 Packet packet) {
+                 Packet packet, int socket) {
   char *path = read_string(reader);
   char *out_path = get_user_file(username, path);
-  UserLocks *locks = (UserLocks *)hash_get(user_locks, username);
-  while (locks == NULL)
+  UserLocks *locks = user_locks != NULL ? (UserLocks *)hash_get(user_locks, username) : NULL;
+  while (socket == -1 && locks == NULL)
     ;
   if (packet.sequence_number == 0) {
     printf("File %s is trying to acquire lock.\n", out_path);
-    pthread_mutex_lock(&locks->file_lock);
+    if(locks != NULL)
+      pthread_mutex_lock(&locks->file_lock);
   }
-  while (hash_has(files_writing, out_path))
+  while (files_writing != NULL && hash_has(files_writing, out_path))
     printf("File %s is being sent.\n", out_path);
   unsigned long path_size = strlen(path);
   printf("Decoding %hu bytes for file %s: %d/%d\n", packet.length, out_path,
@@ -403,7 +573,7 @@ void decode_file(Reader *reader, unsigned long username_length, char username[],
   if (packet.length == username_length + 1 + path_size + 1) {
     FILE *file = fopen(out_path, "wb");
     fclose(file);
-    if (packet.sequence_number == 0)
+    if (locks != NULL && packet.sequence_number == 0)
       pthread_mutex_unlock(&locks->file_lock);
     free(path);
     return;
@@ -412,13 +582,39 @@ void decode_file(Reader *reader, unsigned long username_length, char username[],
     FILE *file = fopen(out_path, "wb");
     hash_set(path_descriptors, out_path, file);
   }
+  if(pending_servers != NULL && !hash_has(pending_servers, out_path)) {
+    uint8_t *count = malloc(sizeof(uint8_t));
+    *count = 1;
+    hash_set(pending_servers, out_path, count);
+  }
 
   FILE *file = hash_get(path_descriptors, out_path);
   fwrite(reader->buffer, sizeof(uint8_t), packet.length - reader->read, file);
   if (packet.sequence_number == packet.total_size - 1) {
     fclose(file);
     hash_remove(path_descriptors, out_path);
-    pthread_mutex_unlock(&locks->file_lock);
+    if(socket != -1) {
+      close(socket);
+      ServerReplica *replica = get_server_replica(*get_primary_server());
+      int ok_conn;
+      if(replica != NULL && open_connection(&ok_conn, replica->hostname, replica->port) == SERVER_CONNECTION_SUCCESS) {
+        printf("Sending DATA OK packet for file %s...\n", out_path);
+        Packet ok;
+        ok.type = DATA_OK;
+        ok.sequence_number = 0;
+        ok.total_size = 1;
+        Writer *writer = create_writer();
+        write_string(writer, out_path);
+        ok.length = writer->length;
+        send(ok_conn, &ok, sizeof(ok), 0);
+        send(ok_conn, writer->buffer, writer->length, 0);
+        destroy_writer(writer);
+      }
+    } else if(get_replica_id() == *get_primary_server()) {
+      send_file_to_servers(path, username);
+    }
+    if(locks != NULL)
+      pthread_mutex_unlock(&locks->file_lock);
   }
   free(out_path);
   free(path);
@@ -569,3 +765,19 @@ void register_server_replica(ServerReplica replica) {
   server_replicas[replica.id] = replica;
 }
 ServerReplica *get_server_replica(uint8_t id) { return server_replicas + id; }
+
+uint16_t get_control_port() {
+  return control_port;
+}
+
+uint16_t get_cluster_port() {
+  return cluster_port;
+}
+
+void set_control_port(uint16_t port) {
+  control_port = port;
+}
+
+void set_cluster_port(uint16_t port) {
+  cluster_port = port;
+}

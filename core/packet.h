@@ -7,7 +7,7 @@
 #define PACKET_LENGTH 1024
 #define USERNAME_LENGTH 32
 
-typedef enum { COMMAND = 0, DATA = 1, ELECTION = 2, HEARTBEAT = 3 } MessageType;
+typedef enum { COMMAND = 0, DATA = 1, ELECTION = 2, HEARTBEAT = 3, DATA_OK = 4 } MessageType;
 typedef enum {
   COMMAND_DOWNLOAD = 0,
   COMMAND_DELETE = 1,
