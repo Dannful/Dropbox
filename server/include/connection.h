@@ -43,7 +43,7 @@ void *thread_control_listen(void *arg);
 void *thread_cluster_listen(void *arg);
 void close_socket();
 void send_download_message(int client_connection, char path[]);
-void send_delete_message(int client_connection, char path[]);
+void send_delete_message(int client_connection, char username[], char path[]);
 void decode_file(Reader *reader, unsigned long username_length, char username[],
                  Packet packet, int socket);
 void send_list_response(char username[], int client_connection);

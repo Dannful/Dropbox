@@ -40,6 +40,7 @@ Map *user_locks = NULL;
 Map *connected_users = NULL;
 Map *connection_files = NULL;
 Map *pending_servers = NULL;
+Map *pending_ack_delete = NULL;
 
 ServerReplica *server_replicas = NULL;
 
@@ -88,6 +89,7 @@ ServerBindResult create_control_socket(uint16_t port) {
     files_writing = hash_create();
     connected_users = hash_create();
     connection_files = hash_create();
+    pending_ack_delete = hash_create();
     pthread_create(&listen_thread, NULL, thread_control_listen, NULL);
   }
   return result;
@@ -180,8 +182,35 @@ void *handle_cluster_connection(void *arg) {
           mkdir(username, 0700);
         free(username);
       } else if(command == COMMAND_DELETE) {
+        uint8_t ack;
+        read_u8(reader, &ack, sizeof(ack));
         char *path = read_string(reader);
-        remove(path);
+        printf("CLUSTER: Received DELETE packet with ack %d and path %s.\n", ack, path);
+        if(ack) {
+          uint8_t *count = (uint8_t*) hash_get(pending_ack_delete, path);
+          (*count)++;
+          destroy_reader(reader);
+          break;
+        } else {
+          remove(path);
+          Packet ack_packet;
+          ack_packet.sequence_number = 0;
+          ack_packet.length = 1;
+          ack_packet.type = COMMAND;
+          Writer *writer = create_writer();
+          write_ulong(writer, COMMAND_DELETE);
+          ack = 1;
+          write_bytes(writer, &ack, sizeof(ack));
+          write_string(writer, path);
+          ack_packet.length = writer->length;
+
+          ServerReplica *primary = get_server_replica(*get_primary_server());
+          int fd;
+          if(primary != NULL && open_connection(&fd, primary->hostname, primary->port) == SERVER_CONNECTION_SUCCESS) {
+            send(fd, &ack_packet, sizeof(ack_packet), 0);
+            send(fd, writer->buffer, writer->length, 0);
+          }
+        }
       }
     } else if(packet.type == ELECTION) {
       uint8_t is_election_over, elected, dead[get_number_of_replicas()];
@@ -219,7 +248,7 @@ void *handle_cluster_connection(void *arg) {
       free(username);
     } else if(packet.type == DATA_OK) {
       char *path = read_string(reader);
-      int *current_count = (int*) hash_get(pending_servers, path);
+      uint8_t *current_count = (uint8_t*) hash_get(pending_servers, path);
       printf("Received DATA OK packet for %s. Current count is %d.\n", path, *current_count);
       (*current_count)++;
       if(*current_count == get_number_of_replicas())
@@ -308,6 +337,10 @@ void *handle_client_connection(void *arg) {
         if (remove(new_file_path) != 0)
           break;
 
+        uint8_t *deletions = malloc(sizeof(uint8_t));
+        *deletions = 1;
+        hash_set(pending_ack_delete, new_file_path, deletions);
+
         for(int i = 0; i < get_number_of_replicas(); i++) {
           if(i != *get_primary_server()) {
             int fd;
@@ -321,7 +354,9 @@ void *handle_client_connection(void *arg) {
             sync.sequence_number = 0;
             sync.total_size = 1;
             Writer *writer = create_writer();
+            uint8_t ack = 0;
             write_ulong(writer, COMMAND_DELETE);
+            write_bytes(writer, &ack, sizeof(ack));
             write_string(writer, new_file_path);
             sync.length = writer->length;
             send(fd, &sync, sizeof(sync), 0);
@@ -329,7 +364,7 @@ void *handle_client_connection(void *arg) {
           }
         }
 
-        send_delete_message(client_connection, arguments);
+        send_delete_message(client_connection, username, arguments);
         free(arguments);
         free(new_file_path);
         break;
@@ -428,7 +463,7 @@ void *handle_client_connection(void *arg) {
             continue;
           }
           if (access(in_user_dir_path, F_OK) != 0) {
-            send_delete_message(client_connection, path);
+            send_delete_message(client_connection, username, path);
           } else {
             uint8_t current_file_hash[HASH_ALGORITHM_BYTE_LENGTH] = {0};
             hash_file(current_file_hash, in_user_dir_path);
@@ -582,11 +617,6 @@ void decode_file(Reader *reader, unsigned long username_length, char username[],
     FILE *file = fopen(out_path, "wb");
     hash_set(path_descriptors, out_path, file);
   }
-  if(pending_servers != NULL && !hash_has(pending_servers, out_path)) {
-    uint8_t *count = malloc(sizeof(uint8_t));
-    *count = 1;
-    hash_set(pending_servers, out_path, count);
-  }
 
   FILE *file = hash_get(path_descriptors, out_path);
   fwrite(reader->buffer, sizeof(uint8_t), packet.length - reader->read, file);
@@ -611,6 +641,9 @@ void decode_file(Reader *reader, unsigned long username_length, char username[],
         destroy_writer(writer);
       }
     } else if(get_replica_id() == *get_primary_server()) {
+      uint8_t *count = malloc(sizeof(uint8_t));
+      *count = 1;
+      hash_set(pending_servers, out_path, count);
       send_file_to_servers(path, username);
     }
     if(locks != NULL)
@@ -636,19 +669,24 @@ void send_upload_message(int client_connection, char username[], char path_in[],
   pthread_create(&upload, NULL, send_file, data);
 }
 
-void send_delete_message(int client_connection, char path[]) {
+void send_delete_message(int client_connection, char username[], char path[]) {
+  char *in_server_file = get_user_file(username, basename(path));
+  void *value = hash_get(pending_ack_delete, in_server_file);
+  if(value != NULL && *((uint8_t*) value) < get_number_of_replicas()) {
+    free(in_server_file);
+    return;
+  }
+  hash_remove(pending_ack_delete, in_server_file);
+  char *client_delete_message = get_user_syncdir_file(basename(path));
   Packet response_packet;
   response_packet.type = COMMAND;
-  unsigned long client_delete_message_length =
-      sizeof("./syncdir/") + strlen(path);
-  char client_delete_message[client_delete_message_length];
-  snprintf(client_delete_message, client_delete_message_length, "./syncdir/%s",
-           path);
   response_packet.total_size = 1;
   response_packet.sequence_number = 0;
   Writer *writer = create_writer();
   if (writer == NULL) {
     printf(FAILED_TO_CREATE_WRITER_MESSAGE);
+    free(in_server_file);
+    free(client_delete_message);
     return;
   }
   write_ulong(writer, COMMAND_DELETE);
@@ -657,6 +695,8 @@ void send_delete_message(int client_connection, char path[]) {
   send(client_connection, &response_packet, sizeof(response_packet), 0);
   send(client_connection, writer->buffer, writer->length, 0);
   destroy_writer(writer);
+  free(in_server_file);
+  free(client_delete_message);
 }
 
 void send_download_message(int client_connection, char path[]) {
