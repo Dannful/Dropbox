@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../core/connection.h"
 #include "../../core/packet.h"
 #include "../../core/reader.h"
 #include <stdint.h>
@@ -14,16 +15,10 @@ typedef struct {
 
 typedef struct {
   int connection_1;
+  char ip_1[INET_ADDRSTRLEN];
   int connection_2;
+  char ip_2[INET_ADDRSTRLEN];
 } UserConnections;
-
-typedef enum {
-  SERVER_ACCEPT_FAILURE = -4,
-  SERVER_SOCKET_CREATION_FAILURE = -3,
-  SERVER_SOCKET_LISTEN_FAILURE = -2,
-  SERVER_SOCKET_BIND_FAILURE = -1,
-  SERVER_SUCCESS = 0
-} ServerBindResult;
 
 typedef struct {
   uint8_t id;

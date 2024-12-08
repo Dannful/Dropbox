@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <utime.h>
 
+int reverse_connection = -1;
 int control_connection = -1;
 char username[USERNAME_LENGTH];
 char hostname[253];
@@ -38,17 +39,31 @@ ConnectionResult open_control_connection() {
   ConnectionResult result =
       open_connection(&control_connection, hostname, server_port);
   if (result == SERVER_CONNECTION_SUCCESS) {
-    pthread_t handler, pooling;
+    pthread_t handler;
     path_descriptors = hash_create();
     file_timestamps = hash_create();
     files_writing = hash_create();
 
     pthread_mutex_init(&pooling_lock, NULL);
 
-    pthread_create(&handler, NULL, control_connection_handler, NULL);
-    pthread_create(&pooling, NULL, pooling_manager, NULL);
+    pthread_create(&handler, NULL, connection_handler, NULL);
   }
   return result;
+}
+
+void *connection_handler(void *arg){
+  pthread_t control, pooling, reconnect;
+  pthread_create(&control, NULL, control_connection_handler, NULL);
+  pthread_create(&pooling, NULL, pooling_manager, NULL);
+  // Wait for both threads to die before accepting reconnects from backup
+  pthread_join(control, NULL);
+  pthread_join(pooling, NULL);
+
+  printf("Lost server connection. Waiting for reverse connection from backup...\n");
+  close_connection(control_connection);
+  control_connection = -1;
+  pthread_create(&reconnect, NULL, handle_reconnect, NULL);
+  pthread_exit(0);
 }
 
 void *pooling_manager(void *arg) {
@@ -103,15 +118,64 @@ void *pooling_manager(void *arg) {
     closedir(dir);
     check_packet.length = writer->length;
     printf("Sending CHECK packet with %lu bytes...\n", writer->length);
-    if (send(control_connection, &check_packet, sizeof(Packet), 0) == 0 ||
-        send(control_connection, writer->buffer, writer->length, 0) == 0) {
+    if (send(control_connection, &check_packet, sizeof(Packet), 0) < 0 ||
+        send(control_connection, writer->buffer, writer->length, 0) < 0) {
       destroy_writer(writer);
-      exit(0);
       break;
     }
     destroy_writer(writer);
     sleep(amount_to_sleep);
   }
+  pthread_exit(0);
+}
+
+ServerBindResult setup_reverse_connection_listener(uint16_t port) {
+  reverse_connection = socket(AF_INET, SOCK_STREAM, 0);
+
+  int optval = 1;
+  setsockopt(reverse_connection, SOL_SOCKET, SO_REUSEADDR, &optval,
+             sizeof(optval));
+
+  if (reverse_connection < 0) {
+    return SERVER_SOCKET_CREATION_FAILURE;
+  }
+
+  struct sockaddr_in address;
+  memset(&address, 0, sizeof(address));
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = INADDR_ANY;
+  address.sin_port = htons(port);
+
+  if (bind(reverse_connection, (struct sockaddr *)&address, sizeof(address)) < 0) {
+    return SERVER_SOCKET_BIND_FAILURE;
+  }
+
+  if (listen(reverse_connection, 1) < 0) {
+    return SERVER_SOCKET_LISTEN_FAILURE;
+  }
+
+  printf("Reverse connection listener set up.\n");
+  return SERVER_SUCCESS;
+}
+
+void *handle_reconnect(void *arg){
+  struct sockaddr_in client_addr;
+  socklen_t client_len = sizeof(client_addr);
+
+  int new_connection = accept(reverse_connection, 
+                              (struct sockaddr *)&client_addr, 
+                              &client_len);
+
+  if (new_connection < 0) {
+    perror("Failed to accept reverse connection.\n");
+    exit(1);
+  }
+
+  printf("Connected to new primary server: %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+  control_connection = new_connection;
+
+  pthread_t new_handler;
+  pthread_create(&new_handler, NULL, connection_handler, NULL);
   pthread_exit(0);
 }
 
@@ -341,6 +405,14 @@ void close_connection() {
     return;
   }
   close(control_connection);
+}
+
+void close_reverse_connection() {
+  if (reverse_connection == -1) {
+    printf("The connection has not been established!");
+    return;
+  }
+  close(reverse_connection);
 }
 
 void set_username(char user[USERNAME_LENGTH]) { strcpy(username, user); }

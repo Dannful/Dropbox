@@ -1,4 +1,5 @@
 #include "../include/connection.h"
+#include "../../core/connection.h"
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
