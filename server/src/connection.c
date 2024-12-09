@@ -18,6 +18,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <utime.h>
+#include <arpa/inet.h>
 
 #define CONTROL_PORT 8000
 
@@ -115,11 +116,14 @@ void *thread_control_listen(void *arg) {
     printf("CONTROL: Listening for connections...\n");
     pthread_t main, backup;
     UserConnection *connection = malloc(sizeof(UserConnection));
+    struct sockaddr_in addr;
     if ((connection->fd = accept(server_client.file_descriptor,
-                                 (struct sockaddr *)&connection->address,
+                                 (struct sockaddr *)&addr,
                                  &server_client.length)) < 0) {
       pthread_exit((void *)1);
     }
+    
+    strcpy(connection->address, (char*)inet_ntoa((struct in_addr)addr.sin_addr));
     printf("CONTROL: Received client connection request: %d. Spawning thread...\n",
       connection->fd);
     pthread_create(&main, NULL, handle_client_connection, connection);
@@ -411,8 +415,10 @@ void *handle_client_connection(void *arg) {
           continue;
         } else if (user->first.fd == -1) {
           user->first.fd = connection.fd;
+          strcpy(user->first.address, connection.address);
         } else if (user->second.fd == -1) {
           user->second.fd = connection.fd;
+          strcpy(user->second.address, connection.address);
         } else {
           printf(
               "User %s already connected to two clients. Closing connection.\n",
@@ -607,12 +613,17 @@ void reconnect_to_clients() {
   for(int i = 0; i < connected_users->size; i++) {
     if(connected_users->elements[i] != NULL) {
       Bucket *bucket = connected_users->elements[i];
-      UserConnections connections = *((UserConnections*) bucket);
+      
+      const char *username = bucket->key;
+      UserConnections connections = *((UserConnections*) bucket->value);
 
       if(connections.first.fd != -1) {
-        while(open_connection(&fd, connections.first.address, 6666) != SERVER_CONNECTION_SUCCESS)
+      
+        printf("Attempting to connect to %s's first device on %s:6666.", username, connections.first.address);
+        while(open_connection(&fd, connections.first.address, 6666) != SERVER_CONNECTION_SUCCESS){
           sleep(3);
-
+        }
+        printf("%s's first device succesfully connected. Sending port and closing...", username);
         if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
           printf("Error sending port.\n");
         }
@@ -620,17 +631,17 @@ void reconnect_to_clients() {
       }
 
       if(connections.second.fd != -1) {
-        while(open_connection(&fd, connections.second.address, 6666) != SERVER_CONNECTION_SUCCESS)
+      
+        printf("Attempting to connect to %s's second device on %s:6666.", username, connections.second.address);
+        while(open_connection(&fd, connections.second.address, 6666) != SERVER_CONNECTION_SUCCESS){
           sleep(3);
-
+        }
+        printf("%s's second device succesfully connected. Sending port and closing...", username);
         if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
           printf("Error sending port.\n");
         }
         close(fd);
       }
-
-      printf("Sent port.\n");
-
     }
   }
 }
