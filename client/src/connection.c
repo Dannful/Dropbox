@@ -192,6 +192,8 @@ void *handle_reconnect(void *arg){
   
   printf("Connected to server %s:%d.\n", inet_ntoa(client_addr.sin_addr), new_port);
 
+  send_sync_dir_message();
+
   pthread_t new_handler;
   pthread_create(&new_handler, NULL, connection_handler, NULL);
   pthread_exit(0);

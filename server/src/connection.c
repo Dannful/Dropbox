@@ -186,13 +186,6 @@ void *handle_cluster_connection(void *arg) {
         printf("Received SYNC_DIR for user %s.\n", username);
 
         if(!is_delete) {
-          UserLocks *locks = (UserLocks *)hash_get(user_locks, username);
-          if (locks == NULL) {
-            locks = malloc(sizeof(UserLocks));
-            pthread_mutex_init(&locks->file_lock, NULL);
-            pthread_mutex_init(&locks->sync_dir_lock, NULL);
-            hash_set(user_locks, username, locks);
-          }
           if (stat(username, &st) == -1)
             mkdir(username, 0700);
           UserConnections *connections = calloc(1, sizeof(UserConnections));
@@ -623,31 +616,30 @@ void reconnect_to_clients() {
       Bucket *bucket = connected_users->elements[i];
       
       const char *username = bucket->key;
-      UserConnections connections = *((UserConnections*) bucket->value);
+      UserConnections *connections = (UserConnections*) bucket->value;
 
-      if(connections.first.fd != -1) {
-      
-        printf("Attempting to connect to %s's first device on %s:6666.", username, connections.first.address);
-        while(open_connection(&fd, connections.first.address, 6666) != SERVER_CONNECTION_SUCCESS){
+      if(connections->first.fd != -1) {
+        printf("Attempting to connect to %s's first device on %s:6666.", username, connections->first.address);
+        while(open_connection(&fd, connections->first.address, 6666) != SERVER_CONNECTION_SUCCESS){
           sleep(3);
         }
         printf("%s's first device succesfully connected. Sending port and closing...\n", username);
         if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
-          printf("Error sending port.\n");
+          printf("Error sending port to device 1.\n");
         }
+        connections->first.fd = -1; // Reset connection in hash table since user has to reconnect
         close(fd);
       }
-
-      if(connections.second.fd != -1) {
-      
-        printf("Attempting to connect to %s's second device on %s:6666.", username, connections.second.address);
-        while(open_connection(&fd, connections.second.address, 6666) != SERVER_CONNECTION_SUCCESS){
+      if(connections->second.fd != -1) {
+        printf("Attempting to connect to %s's second device on %s:6666.", username, connections->second.address);
+        while(open_connection(&fd, connections->second.address, 6666) != SERVER_CONNECTION_SUCCESS){
           sleep(3);
         }
         printf("%s's second device succesfully connected. Sending port and closing...\n", username);
         if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
-          printf("Error sending port.\n");
+          printf("Error sending port to device 2.\n");
         }
+        connections->second.fd = -1;
         close(fd);
       }
     }
