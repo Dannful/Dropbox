@@ -183,8 +183,16 @@ void *handle_cluster_connection(void *arg) {
         char *username = read_string(reader);
         uint8_t is_delete;
         read_u8(reader, &is_delete, sizeof(is_delete));
+        printf("Received SYNC_DIR for user %s.\n", username);
 
         if(!is_delete) {
+          UserLocks *locks = (UserLocks *)hash_get(user_locks, username);
+          if (locks == NULL) {
+            locks = malloc(sizeof(UserLocks));
+            pthread_mutex_init(&locks->file_lock, NULL);
+            pthread_mutex_init(&locks->sync_dir_lock, NULL);
+            hash_set(user_locks, username, locks);
+          }
           if (stat(username, &st) == -1)
             mkdir(username, 0700);
           UserConnections *connections = calloc(1, sizeof(UserConnections));
@@ -623,7 +631,7 @@ void reconnect_to_clients() {
         while(open_connection(&fd, connections.first.address, 6666) != SERVER_CONNECTION_SUCCESS){
           sleep(3);
         }
-        printf("%s's first device succesfully connected. Sending port and closing...", username);
+        printf("%s's first device succesfully connected. Sending port and closing...\n", username);
         if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
           printf("Error sending port.\n");
         }
@@ -636,7 +644,7 @@ void reconnect_to_clients() {
         while(open_connection(&fd, connections.second.address, 6666) != SERVER_CONNECTION_SUCCESS){
           sleep(3);
         }
-        printf("%s's second device succesfully connected. Sending port and closing...", username);
+        printf("%s's second device succesfully connected. Sending port and closing...\n", username);
         if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
           printf("Error sending port.\n");
         }
