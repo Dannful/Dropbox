@@ -609,23 +609,25 @@ void reconnect_to_clients() {
       Bucket *bucket = connected_users->elements[i];
       UserConnections connections = *((UserConnections*) bucket);
 
-      if(open_connection(&fd, connections.first.address, connections.first.port) != SERVER_CONNECTION_SUCCESS) {
-        printf("Error connecting to client.\n");
+      if(connections.first.fd != -1) {
+        while(open_connection(&fd, connections.first.address, 6666) != SERVER_CONNECTION_SUCCESS)
+          sleep(3);
+
+        if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
+          printf("Error sending port.\n");
+        }
+        close(fd);
       }
 
-      if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
-        printf("Error sending port.\n");
-      }
-      close(fd);
+      if(connections.second.fd != -1) {
+        while(open_connection(&fd, connections.second.address, 6666) != SERVER_CONNECTION_SUCCESS)
+          sleep(3);
 
-      if(open_connection(&fd, connections.second.address, connections.second.port) != SERVER_CONNECTION_SUCCESS) {
-        printf("Error connecting to client.\n");
+        if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
+          printf("Error sending port.\n");
+        }
+        close(fd);
       }
-
-      if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
-        printf("Error sending port.\n");
-      }
-      close(fd);
 
       printf("Sent port.\n");
 
