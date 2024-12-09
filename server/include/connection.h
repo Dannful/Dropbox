@@ -36,6 +36,7 @@ void *handle_client_connection(void *arg);
 void *handle_cluster_connection(void *arg);
 void *thread_control_listen(void *arg);
 void *thread_cluster_listen(void *arg);
+void reconnect_to_clients();
 void close_socket();
 void send_download_message(int client_connection, char path[]);
 void send_delete_message(int client_connection, char username[], char path[]);

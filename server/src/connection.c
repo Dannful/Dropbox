@@ -563,6 +563,25 @@ void *handle_client_connection(void *arg) {
   pthread_exit(0);
 }
 
+void reconnect_to_clients(){
+  if (connected_users == NULL){
+    return;
+  }
+  int fd = -1;
+  if(open_connection(&fd, "localhost", 6666) != SERVER_CONNECTION_SUCCESS){
+    printf("Error connecting to client.\n");
+  }
+
+  if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
+    printf("Error sending port.\n");
+  }
+  
+  printf("Sent port.\n");
+  
+  close(fd);
+}
+
+
 void send_file_to_servers(char *path, char *username) {
   for(int replica_id = 0; replica_id < get_number_of_replicas(); replica_id++) {
     if(replica_id == *get_primary_server())

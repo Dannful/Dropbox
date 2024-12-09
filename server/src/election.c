@@ -172,6 +172,11 @@ void set_primary_server(uint8_t replica_id) {
   if (primary_server == NULL)
     primary_server = malloc(sizeof(uint8_t));
   *primary_server = replica_id;
+  
+  if(*primary_server == get_replica_id()) {
+    printf("Am new primary.\n");
+    reconnect_to_clients();
+  }
 }
 
 void read_server_data_file() {
