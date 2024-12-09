@@ -171,8 +171,26 @@ void *handle_reconnect(void *arg){
     exit(1);
   }
 
-  printf("Connected to new primary server: %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-  control_connection = new_connection;
+  printf("Got reverse connection from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+  
+  
+  uint16_t new_port;
+  if (safe_recv(new_connection, &new_port, sizeof(new_port), 0) <= 0) {
+    printf("Error getting port.\n");
+    pthread_exit(0);
+  }
+  
+  printf("Received port %d. Closing...\n", new_port);
+  
+  close(new_connection);
+  
+  set_server_data(inet_ntoa(client_addr.sin_addr), new_port);
+  if(open_connection(&control_connection, hostname, server_port) != SERVER_CONNECTION_SUCCESS){
+    printf("Error connecting to backup server %s:%d.\n", inet_ntoa(client_addr.sin_addr), new_port);
+    pthread_exit(0);
+  }
+  
+  printf("Connected to server %s:%d.\n", inet_ntoa(client_addr.sin_addr), new_port);
 
   pthread_t new_handler;
   pthread_create(&new_handler, NULL, connection_handler, NULL);
