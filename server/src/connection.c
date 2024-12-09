@@ -114,15 +114,15 @@ void *thread_control_listen(void *arg) {
     }
     printf("CONTROL: Listening for connections...\n");
     pthread_t main, backup;
-    int *client_socket = malloc(sizeof(int));
-    if ((*client_socket = accept(server_client.file_descriptor,
-                                 (struct sockaddr *)&server_client.address,
+    UserConnection *connection = malloc(sizeof(UserConnection));
+    if ((connection->fd = accept(server_client.file_descriptor,
+                                 (struct sockaddr *)&connection->address,
                                  &server_client.length)) < 0) {
       pthread_exit((void *)1);
     }
     printf("CONTROL: Received client connection request: %d. Spawning thread...\n",
-           *client_socket);
-    pthread_create(&main, NULL, handle_client_connection, client_socket);
+      connection->fd);
+    pthread_create(&main, NULL, handle_client_connection, connection);
   }
   pthread_exit(0);
 }
@@ -177,9 +177,18 @@ void *handle_cluster_connection(void *arg) {
       if(command == COMMAND_SYNC_DIR) {
         struct stat st = {0};
         char *username = read_string(reader);
+        uint8_t is_delete;
+        read_u8(reader, &is_delete, sizeof(is_delete));
 
-        if (stat(username, &st) == -1)
-          mkdir(username, 0700);
+        if(!is_delete) {
+          if (stat(username, &st) == -1)
+            mkdir(username, 0700);
+          UserConnections *connections = calloc(1, sizeof(UserConnections));
+          hash_set(connected_users, username, connections);
+          read_u8(reader, connections, sizeof(UserConnections));
+        } else {
+          hash_remove(connected_users, username);
+        }
         free(username);
       } else if(command == COMMAND_DELETE) {
         uint8_t ack;
@@ -264,15 +273,15 @@ void *handle_cluster_connection(void *arg) {
 }
 
 void *handle_client_connection(void *arg) {
-  int client_connection = *((int *)arg);
+  UserConnection connection = *((UserConnection*)arg);
   free(arg);
   char *username = NULL;
 
   int error = 0;
   socklen_t length = sizeof(error);
   unsigned int read_bytes = 0;
-  char client_connection_key[(int)ceil(log10(client_connection) + 1) + 1];
-  sprintf(client_connection_key, "%d", client_connection);
+  char client_connection_key[(int)ceil(log10(connection.fd) + 1) + 1];
+  sprintf(client_connection_key, "%d", connection.fd);
   hash_set(connection_files, client_connection_key, create_list());
   hash_set(files_writing, client_connection_key, hash_create());
 
@@ -285,14 +294,14 @@ void *handle_client_connection(void *arg) {
     Packet packet;
     struct stat st = {0};
 
-    printf("Waiting to read bytes from socket %d...\n", client_connection);
+    printf("Waiting to read bytes from socket %d...\n", connection.fd);
 
-    if (safe_recv(client_connection, &packet, sizeof(packet), 0) == 0)
+    if (safe_recv(connection.fd, &packet, sizeof(packet), 0) == 0)
       break;
     printf("Received message of type %d from connection %d and %d bytes.\n",
-           packet.type, client_connection, packet.length);
+           packet.type, connection.fd, packet.length);
     uint8_t buffer[packet.length];
-    if (safe_recv(client_connection, buffer, packet.length, 0) == 0)
+    if (safe_recv(connection.fd, buffer, packet.length, 0) == 0)
       break;
     Reader *reader = create_reader(buffer);
     username = read_string(reader);
@@ -315,7 +324,7 @@ void *handle_client_connection(void *arg) {
         if (!hash_has(path_descriptors, new_file_path) && !hash_has(pending_servers, new_file_path)) {
           List *list = hash_get(connection_files, client_connection_key);
           if (!list_contains(list, new_file_path, strlen(new_file_path) + 1)) {
-            send_upload_message(client_connection, username, new_file_path,
+            send_upload_message(connection.fd, username, new_file_path,
                                 sync ? in_sync_dir : arguments);
           } else {
             goto end;
@@ -364,14 +373,14 @@ void *handle_client_connection(void *arg) {
           }
         }
 
-        send_delete_message(client_connection, username, arguments);
+        send_delete_message(connection.fd, username, arguments);
         free(arguments);
         free(new_file_path);
         break;
       }
       case COMMAND_LIST: {
         printf("Received LST request from user %s.\n", username);
-        send_list_response(username, client_connection);
+        send_list_response(username, connection.fd);
         break;
       }
       case COMMAND_SYNC_DIR: {
@@ -384,6 +393,35 @@ void *handle_client_connection(void *arg) {
           pthread_mutex_init(&locks->file_lock, NULL);
           pthread_mutex_init(&locks->sync_dir_lock, NULL);
           hash_set(user_locks, username, locks);
+        }
+        if (stat(username, &st) == -1) {
+          mkdir(username, 0700);
+        }
+
+        pthread_mutex_lock(&locks->sync_dir_lock);
+        UserConnections *user =
+            (UserConnections *)hash_get(connected_users, username);
+        if (user == NULL) {
+          user = calloc(1, sizeof(UserConnections));
+          user->first.fd = connection.fd;
+          user->second.fd = -1;
+          strcpy(user->first.address, connection.address);
+        } else if (user->first.fd == connection.fd ||
+                   user->second.fd == connection.fd) {
+          continue;
+        } else if (user->first.fd == -1) {
+          user->first.fd = connection.fd;
+        } else if (user->second.fd == -1) {
+          user->second.fd = connection.fd;
+        } else {
+          printf(
+              "User %s already connected to two clients. Closing connection.\n",
+              username);
+          destroy_reader(reader);
+          free(username);
+          close(connection.fd);
+          pthread_mutex_unlock(&locks->sync_dir_lock);
+          pthread_exit(0);
         }
         for(int i = 0; i < get_number_of_replicas(); i++) {
           if(i != *get_primary_server()) {
@@ -400,39 +438,14 @@ void *handle_client_connection(void *arg) {
             Writer *writer = create_writer();
             write_ulong(writer, COMMAND_SYNC_DIR);
             write_string(writer, username);
+            uint8_t is_delete = 0;
+            write_bytes(writer, &is_delete, sizeof(uint8_t));
+            write_bytes(writer, user, sizeof(UserConnections));
             sync.length = writer->length;
             send(fd, &sync, sizeof(sync), 0);
             send(fd, writer->buffer, writer->length, 0);
             destroy_writer(writer);
           }
-        }
-        if (stat(username, &st) == -1) {
-          mkdir(username, 0700);
-        }
-
-        pthread_mutex_lock(&locks->sync_dir_lock);
-        UserConnections *user =
-            (UserConnections *)hash_get(connected_users, username);
-        if (user == NULL) {
-          user = calloc(1, sizeof(UserConnections));
-          user->connection_1 = client_connection;
-          user->connection_2 = -1;
-        } else if (user->connection_1 == client_connection ||
-                   user->connection_2 == client_connection) {
-          continue;
-        } else if (user->connection_1 == -1) {
-          user->connection_1 = client_connection;
-        } else if (user->connection_2 == -1) {
-          user->connection_2 = client_connection;
-        } else {
-          printf(
-              "User %s already connected to two clients. Closing connection.\n",
-              username);
-          destroy_reader(reader);
-          free(username);
-          close(client_connection);
-          pthread_mutex_unlock(&locks->sync_dir_lock);
-          pthread_exit(0);
         }
 
         hash_set(connected_users, username, user);
@@ -463,7 +476,7 @@ void *handle_client_connection(void *arg) {
             continue;
           }
           if (access(in_user_dir_path, F_OK) != 0) {
-            send_delete_message(client_connection, username, path);
+            send_delete_message(connection.fd, username, path);
           } else {
             uint8_t current_file_hash[HASH_ALGORITHM_BYTE_LENGTH] = {0};
             hash_file(current_file_hash, in_user_dir_path);
@@ -504,11 +517,11 @@ void *handle_client_connection(void *arg) {
         hash_destroy(files_ok);
         printf("Sending %d bytes of CHECK response to user %s...\n",
                response.length, username);
-        if (send(client_connection, &response, sizeof(response), 0) <= 0) {
+        if (send(connection.fd, &response, sizeof(response), 0) <= 0) {
           destroy_writer(out);
           break;
         }
-        if (send(client_connection, out->buffer, out->length, 0) <= 0) {
+        if (send(connection.fd, out->buffer, out->length, 0) <= 0) {
           destroy_writer(out);
           break;
         }
@@ -535,20 +548,43 @@ void *handle_client_connection(void *arg) {
     destroy_reader(reader);
   }
   end:
-  printf("Closing connection %d...\n", client_connection);
+  printf("Closing connection %d...\n", connection.fd);
   void *user_ptr = hash_get(connected_users, username);
   if (user_ptr != NULL) {
     UserConnections *user = (UserConnections *)user_ptr;
-    if (user->connection_1 == client_connection) {
-      user->connection_1 = -1;
-    } else if (user->connection_2 == client_connection) {
-      user->connection_2 = -1;
+    if (user->first.fd == connection.fd) {
+      user->first.fd = -1;
+    } else if (user->second.fd == connection.fd) {
+      user->second.fd = -1;
     }
 
-    if (user->connection_1 == -1 && user->connection_2 == -1) {
+    if (user->first.fd == -1 && user->second.fd == -1) {
       printf("Removing user %s from connected users.\n", username);
       hash_remove(connected_users, username);
       free(user);
+      for(int i = 0; i < get_number_of_replicas(); i++) {
+        if(i != *get_primary_server()) {
+          int fd;
+          ServerReplica *replica = get_server_replica(i);
+          if(replica == NULL)
+            continue;
+          if(open_connection(&fd, replica->hostname, replica->port) != SERVER_CONNECTION_SUCCESS)
+            continue;
+          Packet sync;
+          sync.type = COMMAND;
+          sync.sequence_number = 0;
+          sync.total_size = 1;
+          Writer *writer = create_writer();
+          write_ulong(writer, COMMAND_SYNC_DIR);
+          write_string(writer, username);
+          uint8_t is_delete = 1;
+          write_bytes(writer, &is_delete, sizeof(uint8_t));
+          sync.length = writer->length;
+          send(fd, &sync, sizeof(sync), 0);
+          send(fd, writer->buffer, writer->length, 0);
+          destroy_writer(writer);
+        }
+      }
     }
   }
   void *client_connection_files =
@@ -559,26 +595,42 @@ void *handle_client_connection(void *arg) {
 
   if (username != NULL)
     free(username);
-  close(client_connection);
+  close(connection.fd);
   pthread_exit(0);
 }
 
-void reconnect_to_clients(){
-  if (connected_users == NULL){
+void reconnect_to_clients() {
+  if (connected_users == NULL) {
     return;
   }
   int fd = -1;
-  if(open_connection(&fd, "localhost", 6666) != SERVER_CONNECTION_SUCCESS){
-    printf("Error connecting to client.\n");
-  }
+  for(int i = 0; i < connected_users->size; i++) {
+    if(connected_users->elements[i] != NULL) {
+      Bucket *bucket = connected_users->elements[i];
+      UserConnections connections = *((UserConnections*) bucket);
 
-  if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
-    printf("Error sending port.\n");
+      if(open_connection(&fd, connections.first.address, connections.first.port) != SERVER_CONNECTION_SUCCESS) {
+        printf("Error connecting to client.\n");
+      }
+
+      if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
+        printf("Error sending port.\n");
+      }
+      close(fd);
+
+      if(open_connection(&fd, connections.second.address, connections.second.port) != SERVER_CONNECTION_SUCCESS) {
+        printf("Error connecting to client.\n");
+      }
+
+      if(send(fd, &control_port, sizeof(control_port), 0)<= 0) {
+        printf("Error sending port.\n");
+      }
+      close(fd);
+
+      printf("Sent port.\n");
+
+    }
   }
-  
-  printf("Sent port.\n");
-  
-  close(fd);
 }
 
 

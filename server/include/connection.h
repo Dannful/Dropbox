@@ -14,10 +14,14 @@ typedef struct {
 } UserLocks;
 
 typedef struct {
-  int connection_1;
-  char ip_1[INET_ADDRSTRLEN];
-  int connection_2;
-  char ip_2[INET_ADDRSTRLEN];
+  int fd;
+  char address[INET_ADDRSTRLEN];
+  uint16_t port;
+} UserConnection;
+
+typedef struct {
+  UserConnection first;
+  UserConnection second;
 } UserConnections;
 
 typedef struct {
