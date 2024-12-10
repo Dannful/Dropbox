@@ -88,9 +88,9 @@ HeartbeatResult send_heartbeat_message() {
       continue;
     if(!dead[neighbour])
       all_dead = 0;
-    printf("Sending HEARTBEAT message to %d...\n", neighbour);
     int connection_fd = -1;
     ServerReplica *replica = get_server_replica(neighbour);
+    printf("Sending HEARTBEAT message to %d at %s:%d...\n", neighbour, replica->hostname, replica->port);
     ConnectionResult result =
         open_connection(&connection_fd, replica->hostname, replica->port);
     if (result != SERVER_CONNECTION_SUCCESS) {
@@ -172,7 +172,7 @@ void set_primary_server(uint8_t replica_id) {
   if (primary_server == NULL)
     primary_server = malloc(sizeof(uint8_t));
   *primary_server = replica_id;
-  
+
   if(*primary_server == get_replica_id()) {
     printf("Am new primary.\n");
     reconnect_to_clients();

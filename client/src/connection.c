@@ -22,6 +22,7 @@ int control_connection = -1;
 char username[USERNAME_LENGTH];
 char hostname[253];
 uint16_t server_port;
+uint16_t frontend_port = 6666;
 
 Map *path_descriptors = NULL;
 Map *file_timestamps = NULL;
@@ -162,8 +163,8 @@ void *handle_reconnect(void *arg){
   struct sockaddr_in client_addr;
   socklen_t client_len = sizeof(client_addr);
 
-  int new_connection = accept(reverse_connection, 
-                              (struct sockaddr *)&client_addr, 
+  int new_connection = accept(reverse_connection,
+                              (struct sockaddr *)&client_addr,
                               &client_len);
 
   if (new_connection < 0) {
@@ -172,24 +173,24 @@ void *handle_reconnect(void *arg){
   }
 
   printf("Got reverse connection from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-  
-  
+
+
   uint16_t new_port;
   if (safe_recv(new_connection, &new_port, sizeof(new_port), 0) <= 0) {
     printf("Error getting port.\n");
     pthread_exit(0);
   }
-  
+
   printf("Received port %d. Closing...\n", new_port);
-  
+
   close(new_connection);
-  
+
   set_server_data(inet_ntoa(client_addr.sin_addr), new_port);
   if(open_connection(&control_connection, hostname, server_port) != SERVER_CONNECTION_SUCCESS){
     printf("Error connecting to backup server %s:%d.\n", inet_ntoa(client_addr.sin_addr), new_port);
     pthread_exit(0);
   }
-  
+
   printf("Connected to server %s:%d.\n", inet_ntoa(client_addr.sin_addr), new_port);
 
   send_sync_dir_message();
@@ -413,6 +414,7 @@ void send_sync_dir_message() {
   }
   write_string(writer, username);
   write_ulong(writer, COMMAND_SYNC_DIR);
+  write_bytes(writer, &frontend_port, sizeof(frontend_port));
   packet.length = writer->length;
   send(control_connection, &packet, sizeof(Packet), 0);
   send(control_connection, writer->buffer, writer->length, 0);
@@ -436,3 +438,11 @@ void close_reverse_connection() {
 }
 
 void set_username(char user[USERNAME_LENGTH]) { strcpy(username, user); }
+
+uint16_t get_frontend_port() {
+  return frontend_port;
+}
+
+void set_frontend_port(uint16_t port) {
+  frontend_port = port;
+}

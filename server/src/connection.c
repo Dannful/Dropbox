@@ -122,7 +122,7 @@ void *thread_control_listen(void *arg) {
                                  &server_client.length)) < 0) {
       pthread_exit((void *)1);
     }
-    
+
     strcpy(connection->address, (char*)inet_ntoa((struct in_addr)addr.sin_addr));
     printf("CONTROL: Received client connection request: %d. Spawning thread...\n",
       connection->fd);
@@ -389,6 +389,9 @@ void *handle_client_connection(void *arg) {
         break;
       }
       case COMMAND_SYNC_DIR: {
+        uint16_t frontend_port;
+        read_u8(reader, &frontend_port, sizeof(frontend_port));
+
         printf("Received SYN request from user %s.\n", username);
 
         UserLocks *locks = (UserLocks *)hash_get(user_locks, username);
@@ -410,15 +413,18 @@ void *handle_client_connection(void *arg) {
           user = calloc(1, sizeof(UserConnections));
           user->first.fd = connection.fd;
           user->second.fd = -1;
+          user->first.port = frontend_port;
           strcpy(user->first.address, connection.address);
         } else if (user->first.fd == connection.fd ||
                    user->second.fd == connection.fd) {
           continue;
         } else if (user->first.fd == -1) {
           user->first.fd = connection.fd;
+          user->first.port = frontend_port;
           strcpy(user->first.address, connection.address);
         } else if (user->second.fd == -1) {
           user->second.fd = connection.fd;
+          user->second.port = frontend_port;
           strcpy(user->second.address, connection.address);
         } else {
           printf(
@@ -614,13 +620,13 @@ void reconnect_to_clients() {
   for(int i = 0; i < connected_users->size; i++) {
     if(connected_users->elements[i] != NULL) {
       Bucket *bucket = connected_users->elements[i];
-      
+
       const char *username = bucket->key;
       UserConnections *connections = (UserConnections*) bucket->value;
 
       if(connections->first.fd != -1) {
-        printf("Attempting to connect to %s's first device on %s:6666.", username, connections->first.address);
-        while(open_connection(&fd, connections->first.address, 6666) != SERVER_CONNECTION_SUCCESS){
+        printf("Attempting to connect to %s's first device on %s:%d.", username, connections->first.address, connections->first.port);
+        while(open_connection(&fd, connections->first.address, connections->first.port) != SERVER_CONNECTION_SUCCESS){
           sleep(3);
         }
         printf("%s's first device succesfully connected. Sending port and closing...\n", username);
@@ -631,8 +637,8 @@ void reconnect_to_clients() {
         close(fd);
       }
       if(connections->second.fd != -1) {
-        printf("Attempting to connect to %s's second device on %s:6666.", username, connections->second.address);
-        while(open_connection(&fd, connections->second.address, 6666) != SERVER_CONNECTION_SUCCESS){
+        printf("Attempting to connect to %s's second device on %s:%d.", username, connections->second.address, connections->second.port);
+        while(open_connection(&fd, connections->second.address, connections->second.port) != SERVER_CONNECTION_SUCCESS){
           sleep(3);
         }
         printf("%s's second device succesfully connected. Sending port and closing...\n", username);

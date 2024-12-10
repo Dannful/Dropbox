@@ -10,8 +10,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#define REVERSE_CONNECTION_PORT 6666
-
 extern Map *path_descriptors;
 extern Map *file_timestamps;
 extern Map *files_writing;
@@ -28,9 +26,26 @@ void deallocate() {
 }
 
 int main(int argc, char *argv[]) {
+  if(argc == 1) {
+    printf("Missing username.\n");
+    return 1;
+  }
+  if(argc == 2) {
+    printf("Missing primary server IPv4 address.\n");
+    return 1;
+  }
+  if(argc == 3) {
+    printf("Missing primary server port.\n");
+    return 1;
+  }
+  if(argc == 4) {
+    printf("Missing client frontend port.\n");
+    return 1;
+  }
   atexit(deallocate);
   set_username(argv[1]);
   set_server_data(argv[2], atoi(argv[3]));
+  set_frontend_port(atoi(argv[4]));
 
   switch (open_control_connection()) {
   case CONNECTION_INVALID_ADDRESS:
@@ -47,7 +62,7 @@ int main(int argc, char *argv[]) {
     break;
   }
   printf("Setting up reverse connection server...\n");
-  switch (setup_reverse_connection_listener(REVERSE_CONNECTION_PORT)){
+  switch (setup_reverse_connection_listener(get_frontend_port())) {
     case SERVER_ACCEPT_FAILURE:
       printf("Server has failed to accept client connection!\n");
       return 1;
@@ -59,7 +74,7 @@ int main(int argc, char *argv[]) {
       return 1;
     case SERVER_SOCKET_BIND_FAILURE:
       printf("Failed to bind server control socket! Make sure there is no other process running on port %d\n",
-           REVERSE_CONNECTION_PORT);
+        get_frontend_port());
       return 1;
     case SERVER_SUCCESS:
     break;

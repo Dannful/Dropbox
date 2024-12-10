@@ -23,6 +23,10 @@ void send_sync_dir_message();
 void close_connection();
 void close_reverse_connection();
 void set_username(char user[USERNAME_LENGTH]);
+
+uint16_t get_frontend_port();
+void set_frontend_port(uint16_t port);
+
 void *pooling_manager(void *arg);
 uint8_t decode_file(Reader *reader, Packet packet);
 #endif
