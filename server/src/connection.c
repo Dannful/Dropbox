@@ -265,7 +265,7 @@ void *handle_cluster_connection(void *arg) {
       uint8_t *current_count = (uint8_t*) hash_get(pending_servers, path);
       printf("Received DATA OK packet for %s. Current count is %d.\n", path, *current_count);
       (*current_count)++;
-      if(*current_count == get_number_of_replicas())
+      if(*current_count == get_alive_servers())
         hash_remove(pending_servers, path);
       free(path);
       break;
@@ -327,12 +327,22 @@ void *handle_client_connection(void *arg) {
                username, new_file_path);
         char *in_sync_dir = get_user_syncdir_file(arguments);
         if (!hash_has(path_descriptors, new_file_path) && !hash_has(pending_servers, new_file_path)) {
-          List *list = hash_get(connection_files, client_connection_key);
-          if (!list_contains(list, new_file_path, strlen(new_file_path) + 1)) {
-            send_upload_message(connection.fd, username, new_file_path,
-                                sync ? in_sync_dir : arguments);
+          if(!hash_has(pending_servers, new_file_path)) {
+            List *list = hash_get(connection_files, client_connection_key);
+            if (!list_contains(list, new_file_path, strlen(new_file_path) + 1)) {
+              send_upload_message(connection.fd, username, new_file_path,
+                                  sync ? in_sync_dir : arguments);
+            } else {
+              goto end;
+            }
           } else {
-            goto end;
+            uint8_t *current_count = (uint8_t*) hash_get(pending_servers, in_sync_dir);
+            (*current_count)++;
+            if(*current_count == get_alive_servers()) {
+              hash_remove(pending_servers, in_sync_dir);
+              send_upload_message(connection.fd, username, new_file_path,
+                                  sync ? in_sync_dir : arguments);
+            }
           }
         } else {
           goto end;

@@ -5,6 +5,7 @@
 
 typedef enum { AWAIT = 0, BEGIN_ELECTION = 1 } HeartbeatResult;
 
+uint8_t get_alive_servers();
 void send_election_message(uint8_t is_election_over, uint8_t elected);
 HeartbeatResult send_heartbeat_message();
 void receive_election_message(uint8_t is_election_over,

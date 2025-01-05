@@ -111,12 +111,14 @@ HeartbeatResult send_heartbeat_message() {
       close(connection_fd);
       destroy_writer(writer);
       dead[neighbour] = 1;
+      primary_dead = *get_primary_server() == neighbour;
       continue;
     }
     if (send(connection_fd, writer->buffer, writer->length, 0) <= 0) {
       close(connection_fd);
       destroy_writer(writer);
       dead[neighbour] = 1;
+      primary_dead = *get_primary_server() == neighbour;
       continue;
     }
     Packet response_packet;
@@ -125,6 +127,7 @@ HeartbeatResult send_heartbeat_message() {
       close(connection_fd);
       destroy_writer(writer);
       dead[neighbour] = 1;
+      primary_dead = *get_primary_server() == neighbour;
       continue;
     }
     close(connection_fd);
@@ -134,8 +137,9 @@ HeartbeatResult send_heartbeat_message() {
   if(all_dead) {
     printf("Everyone is dead, so I guess I'm the new primary server.\n");
     set_primary_server(get_replica_id());
+    return AWAIT;
   }
-  return primary_dead && !all_dead ? BEGIN_ELECTION : AWAIT;
+  return primary_dead ? BEGIN_ELECTION : AWAIT;
 }
 
 void receive_election_message(uint8_t is_election_over,
@@ -209,4 +213,14 @@ void read_server_data_file() {
 
 void revive_server(uint8_t id) {
   dead[id] = 0;
+}
+
+uint8_t get_alive_servers() {
+  if(dead == NULL)
+    return 1;
+  uint8_t alive_servers = 0;
+  for(uint8_t i = 0; i < get_number_of_replicas(); i++)
+    if(!dead[i])
+      alive_servers++;
+  return alive_servers;
 }
