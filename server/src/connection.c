@@ -634,6 +634,16 @@ void reconnect_to_clients() {
       const char *username = bucket->key;
       UserConnections *connections = (UserConnections*) bucket->value;
 
+      UserLocks *locks = (UserLocks *)hash_get(user_locks, username);
+      if (locks == NULL) {
+        printf("Creating user lock for %s...\n", username);
+        locks = malloc(sizeof(UserLocks));
+        pthread_mutex_init(&locks->file_lock, NULL);
+        pthread_mutex_init(&locks->sync_dir_lock, NULL);
+        hash_set(user_locks, username, locks);
+      }
+
+      pthread_mutex_lock(&locks->sync_dir_lock);
       if(connections->first.fd != -1) {
         printf("Attempting to connect to %s's first device on %s:%d.", username, connections->first.address, connections->first.port);
         while(open_connection(&fd, connections->first.address, connections->first.port) != SERVER_CONNECTION_SUCCESS){
@@ -658,6 +668,7 @@ void reconnect_to_clients() {
         connections->second.fd = -1;
         close(fd);
       }
+      pthread_mutex_unlock(&locks->sync_dir_lock);
     }
   }
 }
@@ -772,7 +783,7 @@ void send_upload_message(int client_connection, char username[], char path_in[],
 void send_delete_message(int client_connection, char username[], char path[]) {
   char *in_server_file = get_user_file(username, basename(path));
   void *value = hash_get(pending_ack_delete, in_server_file);
-  if(value != NULL && *((uint8_t*) value) < get_number_of_replicas()) {
+  if(value != NULL && *((uint8_t*) value) < get_alive_servers()) {
     free(in_server_file);
     return;
   }
