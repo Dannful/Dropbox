@@ -326,7 +326,7 @@ void *handle_client_connection(void *arg) {
         printf("Received download request from user %s and file %s.\n",
                username, new_file_path);
         char *in_sync_dir = get_user_syncdir_file(arguments);
-        if (!hash_has(path_descriptors, new_file_path) && !hash_has(pending_servers, new_file_path)) {
+        if (!hash_has(path_descriptors, new_file_path)) {
           if(!hash_has(pending_servers, new_file_path)) {
             List *list = hash_get(connection_files, client_connection_key);
             if (!list_contains(list, new_file_path, strlen(new_file_path) + 1)) {
@@ -336,10 +336,9 @@ void *handle_client_connection(void *arg) {
               goto end;
             }
           } else {
-            uint8_t *current_count = (uint8_t*) hash_get(pending_servers, in_sync_dir);
-            (*current_count)++;
+            uint8_t *current_count = (uint8_t*) hash_get(pending_servers, new_file_path);
             if(*current_count == get_alive_servers()) {
-              hash_remove(pending_servers, in_sync_dir);
+              hash_remove(pending_servers, new_file_path);
               send_upload_message(connection.fd, username, new_file_path,
                                   sync ? in_sync_dir : arguments);
             }
@@ -499,6 +498,7 @@ void *handle_client_connection(void *arg) {
             continue;
           }
           if (access(in_user_dir_path, F_OK) != 0) {
+            printf("Sending DELETE for file %s with hash %s.\n", path, file_hash_string);
             send_delete_message(connection.fd, username, path);
           } else {
             uint8_t current_file_hash[HASH_ALGORITHM_BYTE_LENGTH] = {0};
